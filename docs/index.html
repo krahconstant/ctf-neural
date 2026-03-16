@@ -108,7 +108,7 @@ select option{background:var(--bg3)}textarea{resize:vertical;min-height:70px}
 <div class="sb">
   <div class="sb-logo">
     <div class="logo">AI</div>
-    <div><div class="tn" style="font-size:11px">CTF·NEURAL</div><div class="tv">v4.0 · Gemini</div></div>
+    <div><div class="tn" style="font-size:11px">CTF·NEURAL</div><div class="tv">v4.1 · Groq</div></div>
   </div>
   <div class="sb-sec">
     <div class="sb-lbl">Plateforme</div>
@@ -135,12 +135,12 @@ select option{background:var(--bg3)}textarea{resize:vertical;min-height:70px}
 <div class="main">
   <div class="tb">
     <div class="logo" style="width:24px;height:24px;font-size:9px">AI</div>
-    <div><div class="tn">CTF·NEURAL</div><div class="tv" style="font-size:7px">Powered by Gemini 2.0 Flash · Execution Sandbox</div></div>
+    <div><div class="tn">CTF·NEURAL</div><div class="tv" style="font-size:7px">Powered by Groq · Llama 3.3 70B · Execution Sandbox</div></div>
     <div class="gap"></div>
     <div id="runbadge" class="h" style="display:flex;align-items:center;gap:6px;font-size:9px;color:var(--a)">
       <div class="dot busy"></div><span id="runlbl">Analyse + Exécution…</span>
     </div>
-    <div class="gemini-badge"><div class="gemini-dot"></div>Gemini 2.0 Flash</div>
+    <div class="gemini-badge"><div class="gemini-dot"></div>Groq · Llama 3.3 70B</div>
     <div class="api-btn" onclick="showModal()" style="margin-left:8px">
       <div class="dot" id="adot"></div><span id="albl">Configurer API</span>
     </div>
@@ -250,8 +250,8 @@ select option{background:var(--bg3)}textarea{resize:vertical;min-height:70px}
       <div class="cb">
         <div class="sr">
           <div class="si">
-            <div class="st">🔑 Clé API Gemini (gratuite)</div>
-            <div class="ss">console.cloud.google.com → AI Studio → Get API Key · 1500 req/jour gratuits</div>
+            <div class="st">🔑 Clé API Groq (gratuite)</div>
+            <div class="ss">console.groq.com → API Keys → Create Key · 14 400 req/jour gratuits</div>
           </div>
           <div class="sc2"><button class="btn btn-g" onclick="showModal()" style="width:100%">Configurer →</button></div>
         </div>
@@ -266,19 +266,19 @@ select option{background:var(--bg3)}textarea{resize:vertical;min-height:70px}
       </div>
     </div>
     <div class="card">
-      <div class="ch"><span class="ct">📖 Obtenir la clé Gemini gratuite</span></div>
+      <div class="ch"><span class="ct">📖 Obtenir la clé Groq gratuite</span></div>
       <div class="cb">
         <div class="slbl">En 2 minutes</div>
-        <div class="codeblock">1. Va sur https://aistudio.google.com
+        <div class="codeblock">1. Va sur https://console.groq.com
 2. Connecte-toi avec ton compte Google
 3. Clique "Get API Key" → "Create API key"
-4. Copie la clé (commence par AIza...)
+4. Copie la clé (commence par gsk_...)
 5. Colle-la dans "Configurer API" ci-dessus
 
 Limites gratuites (largement suffisant pour CTF):
 • 1 500 requêtes / jour
 • 1 000 000 tokens / minute
-• Modèle: gemini-2.0-flash (très capable)</div>
+• Modèle: groq/llama-3.3-70b (très capable)</div>
         <div class="div"></div>
         <div class="slbl">Mise à jour du backend (v4.0)</div>
         <div class="codeblock"># Dans ton repo GitHub, remplace backend/app.py
@@ -296,15 +296,15 @@ Limites gratuites (largement suffisant pour CTF):
 <!-- MODAL API -->
 <div class="mbg h" id="mbg" onclick="closeModal()">
   <div class="mo" onclick="event.stopPropagation()">
-    <div class="mt">🔑 Configuration — Gemini API (Gratuit)</div>
+    <div class="mt">🔑 Configuration — Groq API (Gratuit)</div>
     <div class="ms">
-      <strong>Gratuit :</strong> 1500 requêtes/jour, aucune carte bancaire requise.<br>
-      Obtiens ta clé sur <strong>aistudio.google.com</strong> → "Get API Key".<br>
+      <strong>Gratuit :</strong> 14 400 requêtes/jour, aucune carte bancaire requise.<br>
+      Obtiens ta clé sur <strong>console.groq.com</strong> → "Get API Key".<br>
       Stockée localement dans ton navigateur uniquement.
     </div>
     <div class="fg" style="margin-bottom:16px">
       <label>Clé API Gemini</label>
-      <input type="password" id="akin" placeholder="AIzaSy...">
+      <input type="password" id="akin" placeholder="gsk_...">
     </div>
     <div style="display:flex;gap:9px">
       <button class="btn btn-g" onclick="saveApi()" style="flex:1">✓ Sauvegarder</button>
@@ -335,7 +335,7 @@ function saveApi(){
 }
 function setApi(st){
   const d=document.getElementById('adot'),l=document.getElementById('albl');
-  if(st==='ready'){d.className='dot on';l.textContent='Gemini · prêt';}
+  if(st==='ready'){d.className='dot on';l.textContent='Groq · prêt';}
   else if(st==='busy'){d.className='dot busy';l.textContent='Analyse...';}
   else{d.className='dot';l.textContent='Configurer API';}
 }
@@ -410,7 +410,7 @@ async function doSolve(){
   fd.append('description',document.getElementById('desc').value);
   fd.append('category',document.getElementById('cat').value);
 
-  tlog('prompt','▸ CTF·NEURAL v4.0 · Gemini + Sandbox');
+  tlog('prompt','▸ CTF·NEURAL v4.1 · Groq + Sandbox');
   tlog('info',`[*] ${S.fname||'texte'} · cat=${document.getElementById('cat').value}`);
   tlog('info','[*] Analyse IA + exécution réelle activées');
 
@@ -495,7 +495,7 @@ function showFindings(data){
 function showResult(data){
   document.getElementById('rcard').classList.remove('h');
   const elapsed=((Date.now()-S.t0)/1000).toFixed(1);
-  document.getElementById('rtime').textContent=`${elapsed}s · Gemini 2.0 Flash`;
+  document.getElementById('rtime').textContent=`${elapsed}s · Groq · Llama 3.3 70B`;
   const fr=data.flag||{};
   let h='';
   if(fr.flag){
