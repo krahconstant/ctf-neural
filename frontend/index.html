@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CTF·NEURAL — Automated Solve Platform</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Syne:wght@600;700;800&display=swap">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#080b0f;--bg2:#0d1117;--bg3:#131920;--bg4:#1a2230;
+  --bord:rgba(0,255,140,.11);--bord2:rgba(0,255,140,.28);
+  --g:#00ff8c;--c:#00d4ff;--a:#ffb020;--r:#ff4d4d;--p:#a78bfa;
+  --tx:#dde6f0;--mu:#566577;
+  --mono:'JetBrains Mono',monospace;--sans:'Syne',sans-serif;
+}
+html,body{height:100%;background:var(--bg);color:var(--tx);font-family:var(--mono);font-size:13px;line-height:1.5;}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--bord2);border-radius:2px}
+
+/* ─── LAYOUT ─────────────────────────────────────────── */
+.app{display:flex;height:100vh;overflow:hidden}
+.sb{width:188px;background:var(--bg2);border-right:1px solid var(--bord);display:flex;flex-direction:column;flex-shrink:0}
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+
+/* ─── TOPBAR ─────────────────────────────────────────── */
+.tb{background:var(--bg2);border-bottom:1px solid var(--bord);padding:11px 18px;display:flex;align-items:center;gap:12px;flex-shrink:0}
+.logo{width:28px;height:28px;background:linear-gradient(135deg,var(--g),var(--c));border-radius:7px;display:flex;align-items:center;justify-content:center;font-family:var(--sans);font-size:10px;font-weight:800;color:#000;flex-shrink:0}
+.tn{font-family:var(--sans);font-size:13px;font-weight:800;color:var(--g);letter-spacing:.04em}
+.tv{font-size:8px;color:var(--mu);letter-spacing:.1em;text-transform:uppercase}
+.gap{flex:1}
+.api-btn{display:flex;align-items:center;gap:6px;font-size:10px;padding:5px 12px;border:1px solid var(--bord);border-radius:20px;cursor:pointer;background:rgba(0,255,140,.02);transition:all .2s;color:var(--tx)}
+.api-btn:hover{border-color:var(--bord2)}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--mu)}
+.dot.on{background:var(--g);animation:p 2s infinite}
+.dot.busy{background:var(--a);animation:p 1s infinite}
+@keyframes p{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* ─── SIDEBAR ────────────────────────────────────────── */
+.sb-logo{padding:14px 12px 10px;border-bottom:1px solid var(--bord);display:flex;align-items:center;gap:8px}
+.sb-sec{padding:10px 0}
+.sb-lbl{font-size:8px;text-transform:uppercase;letter-spacing:.15em;color:var(--mu);padding:0 12px 6px}
+.nb{display:flex;align-items:center;gap:8px;padding:7px 12px;width:100%;background:none;border:none;color:var(--mu);font-size:10px;font-family:var(--mono);cursor:pointer;border-left:2px solid transparent;transition:all .13s;text-align:left}
+.nb:hover{color:var(--tx);background:rgba(255,255,255,.02)}
+.nb.on{color:var(--g);border-left-color:var(--g);background:rgba(0,255,140,.04)}
+.ni{font-size:12px;width:14px;text-align:center;flex-shrink:0}
+.nc{margin-left:auto;font-size:8px;padding:1px 5px;border-radius:8px}
+.ncg{background:rgba(0,255,140,.1);color:var(--g)}
+.nca{background:rgba(255,176,32,.1);color:var(--a)}
+.sb-foot{margin-top:auto;padding:12px;border-top:1px solid var(--bord);font-size:9px;color:var(--mu);line-height:1.9}
+.fv{color:var(--c)}
+
+/* ─── CONTENT ────────────────────────────────────────── */
+.content{flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:16px}
+.pg{display:none;flex-direction:column;gap:16px}
+.pg.on{display:flex}
+
+/* ─── CARD ───────────────────────────────────────────── */
+.card{background:var(--bg2);border:1px solid var(--bord);border-radius:10px;overflow:hidden}
+.ch{background:var(--bg3);border-bottom:1px solid var(--bord);padding:9px 14px;display:flex;align-items:center;justify-content:space-between}
+.ct{font-size:9px;text-transform:uppercase;letter-spacing:.12em;color:var(--g);font-weight:600}
+.cb{padding:14px}
+
+/* ─── UPLOAD ─────────────────────────────────────────── */
+.drop{border:2px dashed var(--bord2);border-radius:10px;padding:28px 18px;text-align:center;cursor:pointer;transition:all .2s;background:rgba(0,255,140,.015)}
+.drop:hover,.drop.drag,.drop.has{border-color:var(--g);background:rgba(0,255,140,.04)}
+.drop.has{border-style:solid}
+.di{font-size:28px;display:block;margin-bottom:9px}
+.dt{font-family:var(--sans);font-size:14px;font-weight:700;color:var(--tx);margin-bottom:3px}
+.ds{font-size:10px;color:var(--mu)}
+.dok{font-size:10px;color:var(--g);margin-top:6px;font-weight:600}
+
+/* ─── FORM ───────────────────────────────────────────── */
+label{font-size:9px;color:var(--mu);display:block;margin-bottom:4px;text-transform:uppercase;letter-spacing:.08em}
+input[type=text],input[type=password],select,textarea{background:var(--bg3);border:1px solid var(--bord);border-radius:7px;padding:7px 11px;color:var(--tx);font-family:var(--mono);font-size:11px;width:100%;transition:border-color .15s}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--bord2)}
+select option{background:var(--bg3)}
+textarea{resize:vertical;min-height:70px}
+.fr{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+.fg{display:flex;flex-direction:column}
+
+/* ─── BUTTONS ────────────────────────────────────────── */
+.btn{padding:8px 16px;border-radius:7px;border:1px solid;font-family:var(--mono);font-size:10px;font-weight:600;cursor:pointer;transition:all .14s;letter-spacing:.04em}
+.btn-g{background:rgba(0,255,140,.07);color:var(--g);border-color:var(--bord2)}
+.btn-g:hover{background:rgba(0,255,140,.15);border-color:var(--g)}
+.btn-g:disabled{opacity:.35;cursor:not-allowed}
+.btn-s{background:transparent;color:var(--mu);border-color:var(--bord)}
+.btn-s:hover{color:var(--tx);background:rgba(255,255,255,.03)}
+.btn-row{display:flex;gap:9px;align-items:center;margin-top:14px}
+
+/* ─── PIPELINE ───────────────────────────────────────── */
+.pipe{display:flex;align-items:center;padding:6px 0;overflow-x:auto;gap:0}
+.ps{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:70px;flex-shrink:0}
+.pc{width:32px;height:32px;border-radius:8px;border:2px solid var(--bord);display:flex;align-items:center;justify-content:center;font-size:12px;transition:all .4s}
+.pc.done{border-color:var(--g);background:rgba(0,255,140,.1);color:var(--g)}
+.pc.active{border-color:var(--c);background:rgba(0,212,255,.08);color:var(--c);animation:gl 1.5s infinite}
+.pc.err{border-color:var(--r);background:rgba(255,77,77,.1);color:var(--r)}
+@keyframes gl{0%,100%{box-shadow:0 0 0 0 rgba(0,212,255,.4)}50%{box-shadow:0 0 0 5px rgba(0,212,255,0)}}
+.pl{font-size:7px;color:var(--mu);text-align:center;line-height:1.3;max-width:65px}
+.pl.done{color:var(--g)}
+.pl.active{color:var(--c)}
+.pcon{flex:1;height:2px;background:var(--bord);min-width:10px;transition:background .5s}
+.pcon.done{background:var(--g)}
+.pcon.active{background:linear-gradient(90deg,var(--g),var(--c))}
+
+/* ─── TERMINAL ───────────────────────────────────────── */
+.term{background:#05080d;border:1px solid var(--bord);border-radius:9px;overflow:hidden}
+.th{background:var(--bg3);padding:6px 12px;border-bottom:1px solid var(--bord);display:flex;align-items:center;gap:7px}
+.tdots{display:flex;gap:4px}
+.td{width:8px;height:8px;border-radius:50%}
+.tbod{padding:11px;height:190px;overflow-y:auto;font-size:10.5px}
+.tl{line-height:1.9;white-space:pre-wrap;word-break:break-all}
+.t-ok{color:var(--g)}
+.t-info{color:var(--c)}
+.t-warn{color:var(--a)}
+.t-err{color:var(--r)}
+.t-dim{color:var(--mu)}
+.t-flag{color:var(--g);font-weight:700}
+.t-prompt{color:var(--g)}
+.cur{display:inline-block;width:6px;height:11px;background:var(--g);vertical-align:text-bottom;animation:bl 1s infinite}
+@keyframes bl{0%,49%{opacity:1}50%,100%{opacity:0}}
+
+/* ─── FINDINGS ───────────────────────────────────────── */
+.fi{display:flex;align-items:flex-start;gap:9px;padding:8px 10px;background:var(--bg3);border:1px solid var(--bord);border-radius:7px;margin-bottom:6px}
+.fi-ic{font-size:11px;width:14px;flex-shrink:0;margin-top:1px;text-align:center}
+.fi-body{flex:1;min-width:0}
+.fi-t{font-size:10px;color:var(--tx);font-weight:600}
+.fi-d{font-size:9px;color:var(--mu);margin-top:2px;line-height:1.5}
+.conf{font-size:8px;padding:2px 6px;border-radius:4px;margin-left:7px;flex-shrink:0}
+.conf-h{background:rgba(0,255,140,.1);color:var(--g)}
+.conf-m{background:rgba(255,176,32,.1);color:var(--a)}
+
+/* ─── FLAG BOX ───────────────────────────────────────── */
+.flagbox{background:rgba(0,255,140,.04);border:2px solid var(--g);border-radius:10px;padding:18px;text-align:center;margin-bottom:12px}
+.fl{font-size:9px;text-transform:uppercase;letter-spacing:.12em;color:var(--mu);margin-bottom:7px}
+.fv2{font-family:var(--sans);font-size:19px;font-weight:800;color:var(--g);word-break:break-all;margin-bottom:9px}
+.fcpy{font-size:9px;cursor:pointer;color:var(--mu);border:1px solid var(--bord);border-radius:4px;padding:3px 10px;background:transparent;font-family:var(--mono);transition:all .14s}
+.fcpy:hover{color:var(--g);border-color:var(--bord2)}
+.nofl{background:rgba(255,176,32,.03);border:1px solid rgba(255,176,32,.25);border-radius:9px;padding:14px;margin-bottom:12px}
+
+/* ─── CODE ───────────────────────────────────────────── */
+.codeblock{background:#05080d;border:1px solid var(--bord);border-radius:8px;padding:12px;font-size:10px;overflow-x:auto;line-height:1.75;color:#8faac0;max-height:320px;overflow-y:auto;white-space:pre;position:relative}
+.cpbtn{position:absolute;top:7px;right:7px;font-size:8px;padding:2px 7px;border-radius:3px;border:1px solid var(--bord);background:var(--bg3);color:var(--mu);cursor:pointer;font-family:var(--mono)}
+.cpbtn:hover{color:var(--g)}
+
+/* ─── HISTORY ────────────────────────────────────────── */
+.hi{display:flex;align-items:center;gap:10px;padding:9px 11px;background:var(--bg3);border:1px solid var(--bord);border-radius:8px;margin-bottom:7px;cursor:pointer;transition:border-color .14s}
+.hi:hover{border-color:var(--bord2)}
+.hdot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.hin{flex:1;min-width:0}
+.hname{font-size:11px;font-weight:600;color:var(--tx)}
+.hmeta{font-size:9px;color:var(--mu);margin-top:2px}
+.hflag{font-size:9px;color:var(--mu);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hpts{font-size:10px;font-weight:700;flex-shrink:0}
+
+/* ─── STATS ──────────────────────────────────────────── */
+.sg{display:grid;grid-template-columns:repeat(4,1fr);gap:9px}
+.sc{background:var(--bg3);border:1px solid var(--bord);border-radius:8px;padding:11px;text-align:center}
+.sv{font-family:var(--sans);font-size:22px;font-weight:800}
+.sl{font-size:8px;color:var(--mu);text-transform:uppercase;letter-spacing:.08em;margin-top:2px}
+
+/* ─── SETTINGS ───────────────────────────────────────── */
+.sr{display:flex;align-items:center;justify-content:space-between;padding:13px 0;border-bottom:1px solid var(--bord)}
+.sr:last-child{border-bottom:none}
+.si{flex:1}
+.st{font-size:11px;font-weight:600;color:var(--tx)}
+.ss{font-size:9px;color:var(--mu);margin-top:2px}
+.sc2{width:210px;flex-shrink:0}
+
+/* ─── MODAL ──────────────────────────────────────────── */
+.mbg{position:fixed;inset:0;background:rgba(0,0,0,.8);display:flex;align-items:center;justify-content:center;z-index:999;padding:18px}
+.mbg.h{display:none}
+.mo{background:var(--bg2);border:1px solid var(--bord2);border-radius:12px;padding:22px;width:400px;max-width:100%}
+.mt{font-family:var(--sans);font-size:15px;font-weight:700;margin-bottom:5px}
+.ms{font-size:10px;color:var(--mu);margin-bottom:16px;line-height:1.6}
+
+/* ─── TAGS ───────────────────────────────────────────── */
+.tag{font-size:8px;padding:2px 6px;border-radius:4px;border:1px solid;display:inline-block;font-weight:500}
+.tr{color:var(--p);border-color:rgba(167,139,250,.3);background:rgba(167,139,250,.07)}
+.tp2{color:var(--r);border-color:rgba(255,77,77,.3);background:rgba(255,77,77,.07)}
+.tw{color:var(--c);border-color:rgba(0,212,255,.3);background:rgba(0,212,255,.07)}
+.tc{color:var(--g);border-color:rgba(0,255,140,.3);background:rgba(0,255,140,.07)}
+.tf2{color:var(--a);border-color:rgba(255,176,32,.3);background:rgba(255,176,32,.07)}
+
+.h{display:none!important}
+.div{height:1px;background:var(--bord);margin:12px 0}
+.slbl{font-size:9px;text-transform:uppercase;letter-spacing:.12em;color:var(--mu);margin-bottom:8px}
+.warn-txt{font-size:9px;color:var(--a)}
+</style>
+</head>
+<body>
+<div class="app">
+
+<!-- SIDEBAR -->
+<div class="sb">
+  <div class="sb-logo">
+    <div class="logo">AI</div>
+    <div><div class="tn" style="font-size:11px">CTF·NEURAL</div><div class="tv">v3.1 beta</div></div>
+  </div>
+  <div class="sb-sec">
+    <div class="sb-lbl">Plateforme</div>
+    <button class="nb on" onclick="showPage('solve',this)"><span class="ni">▸</span>Résoudre</button>
+    <button class="nb" onclick="showPage('history',this)"><span class="ni">≡</span>Historique<span class="nc ncg" id="hcnt">0</span></button>
+    <button class="nb" onclick="showPage('settings',this)"><span class="ni">◌</span>Paramètres</button>
+  </div>
+  <div class="sb-sec">
+    <div class="sb-lbl">Agents</div>
+    <button class="nb" onclick="qa('reverse')"><span class="ni">🔬</span>Reverse</button>
+    <button class="nb" onclick="qa('pwn')"><span class="ni">⚡</span>Exploit</button>
+    <button class="nb" onclick="qa('web')"><span class="ni">◉</span>Web</button>
+    <button class="nb" onclick="qa('crypto')"><span class="ni">◆</span>Crypto</button>
+    <button class="nb" onclick="qa('forensics')"><span class="ni">🔍</span>Forensics</button>
+  </div>
+  <div class="sb-foot">
+    Résolus: <span class="fv" id="sf1">0</span><br>
+    Tokens: <span class="fv" id="sf2">0</span><br>
+    Backend: <span class="fv" id="sfb">—</span>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div class="main">
+
+  <!-- TOPBAR -->
+  <div class="tb">
+    <div class="logo" style="width:24px;height:24px;font-size:9px">AI</div>
+    <div><div class="tn">CTF·NEURAL</div><div class="tv" style="font-size:7px">Automated Solve Platform</div></div>
+    <div class="gap"></div>
+    <div id="runbadge" class="h" style="display:flex;align-items:center;gap:6px;font-size:9px;color:var(--a)">
+      <div class="dot busy"></div><span id="runlbl">En cours…</span>
+    </div>
+    <div class="api-btn" onclick="showModal()">
+      <div class="dot" id="adot"></div>
+      <span id="albl">Configurer API</span>
+    </div>
+  </div>
+
+  <div class="content">
+
+  <!-- PAGE SOLVE -->
+  <div class="pg on" id="pg-solve">
+
+    <div class="card">
+      <div class="ch"><span class="ct">📁 Nouveau défi</span><span id="ftag" style="font-size:9px;color:var(--mu)"></span></div>
+      <div class="cb">
+        <div class="drop" id="dz" onclick="document.getElementById('fi').click()" ondragover="ddrag(event)" ondragleave="udrag()" ondrop="drop(event)">
+          <span class="di">📂</span>
+          <div class="dt" id="upt">Dépose ton fichier ici</div>
+          <div class="ds" id="ups">ELF · PE · ZIP · PCAP · Script · Image · Texte</div>
+          <div class="dok" id="upok"></div>
+        </div>
+        <input type="file" id="fi" style="display:none" onchange="onfi(event)">
+        <div style="margin-top:12px">
+          <label>Description du défi (optionnel — aide l'IA)</label>
+          <textarea id="desc" placeholder="Ex: Défi crypto 500pts, RSA avec petit exposant…&#10;Ou colle directement du code/texte si pas de fichier." oninput="chkr()"></textarea>
+        </div>
+        <div class="fr">
+          <div class="fg"><label>Catégorie</label>
+            <select id="cat">
+              <option value="auto">🤖 Auto-detect</option>
+              <option value="reverse">↺ Reverse Engineering</option>
+              <option value="pwn">⚡ Binary Exploitation</option>
+              <option value="web">◉ Web</option>
+              <option value="crypto">◆ Cryptographie</option>
+              <option value="forensics">🔍 Forensics / Stego</option>
+              <option value="misc">◌ Misc</option>
+            </select>
+          </div>
+          <div class="fg"><label>Points (optionnel)</label>
+            <input type="text" id="pts" placeholder="Ex: 500">
+          </div>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-g" id="sbtn" onclick="solve()" disabled>▸ Lancer l'analyse</button>
+          <button class="btn btn-s" onclick="clearAll()">✕ Effacer</button>
+          <span class="warn-txt" id="nowarn">⚠ Configure API + Backend →</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pipeline -->
+    <div class="card h" id="pcard">
+      <div class="ch"><span class="ct">⚡ Pipeline</span><span id="ptmr" style="font-size:9px;color:var(--c)"></span></div>
+      <div class="cb">
+        <div class="pipe" id="pipe">
+          <div class="ps"><div class="pc" id="ps0">📡</div><div class="pl" id="pl0">Recon</div></div>
+          <div class="pcon" id="pcon0"></div>
+          <div class="ps"><div class="pc" id="ps1">🔬</div><div class="pl" id="pl1">Analyse</div></div>
+          <div class="pcon" id="pcon1"></div>
+          <div class="ps"><div class="pc" id="ps2">🧠</div><div class="pl" id="pl2">Stratégie</div></div>
+          <div class="pcon" id="pcon2"></div>
+          <div class="ps"><div class="pc" id="ps3">⚙️</div><div class="pl" id="pl3">Script</div></div>
+          <div class="pcon" id="pcon3"></div>
+          <div class="ps"><div class="pc" id="ps4">🏆</div><div class="pl" id="pl4">Flag</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Terminal -->
+    <div class="term h" id="tcard">
+      <div class="th">
+        <div class="tdots">
+          <div class="td" style="background:#ff5f57"></div>
+          <div class="td" style="background:#ffbd2e"></div>
+          <div class="td" style="background:#28c840"></div>
+        </div>
+        <span style="font-size:9px;color:var(--mu);margin-left:7px">ctf-neural · agent · live</span>
+        <button onclick="document.getElementById('tbod').innerHTML=''" style="margin-left:auto;background:none;border:none;color:var(--mu);cursor:pointer;font-size:9px;font-family:var(--mono)">clear</button>
+      </div>
+      <div class="tbod" id="tbod"></div>
+    </div>
+
+    <!-- Findings -->
+    <div class="card h" id="fcard">
+      <div class="ch"><span class="ct">🔎 Analyse IA</span><span id="fbadge"></span></div>
+      <div class="cb" id="fbod"></div>
+    </div>
+
+    <!-- Result -->
+    <div class="card h" id="rcard">
+      <div class="ch"><span class="ct">🏆 Résultat</span><span id="rtime" style="font-size:9px;color:var(--mu)"></span></div>
+      <div class="cb" id="rbod"></div>
+    </div>
+
+  </div><!-- /pg-solve -->
+
+  <!-- PAGE HISTORY -->
+  <div class="pg" id="pg-history">
+    <div class="sg">
+      <div class="sc"><div class="sv" style="color:var(--g)" id="st1">0</div><div class="sl">Résolus</div></div>
+      <div class="sc"><div class="sv" style="color:var(--c)" id="st2">0</div><div class="sl">Analysés</div></div>
+      <div class="sc"><div class="sv" style="color:var(--a)" id="st3">0</div><div class="sl">Pts total</div></div>
+      <div class="sc"><div class="sv" style="color:var(--p)" id="st4">0%</div><div class="sl">Taux succès</div></div>
+    </div>
+    <div class="card">
+      <div class="ch"><span class="ct">Historique</span><button class="btn btn-s" style="padding:3px 9px;font-size:9px" onclick="clrHist()">Effacer</button></div>
+      <div class="cb" id="hbod"><div style="text-align:center;color:var(--mu);padding:28px 0;font-size:11px">Aucun défi analysé.</div></div>
+    </div>
+  </div>
+
+  <!-- PAGE SETTINGS -->
+  <div class="pg" id="pg-settings">
+    <div class="card">
+      <div class="ch"><span class="ct">⚙ Paramètres</span></div>
+      <div class="cb">
+        <div class="sr">
+          <div class="si"><div class="st">Clé API Anthropic</div><div class="ss">Stockée dans le navigateur. Jamais transmise à nos serveurs.</div></div>
+          <div class="sc2"><button class="btn btn-g" onclick="showModal()" style="width:100%">🔑 Configurer →</button></div>
+        </div>
+        <div class="sr">
+          <div class="si"><div class="st">Modèle Claude</div><div class="ss">Sonnet = équilibré · Opus = plus puissant · Haiku = rapide</div></div>
+          <div class="sc2">
+            <select id="msel" onchange="S.model=this.value;sv()">
+              <option value="claude-sonnet-4-20250514">Sonnet 4 (recommandé)</option>
+              <option value="claude-opus-4-20250514">Opus 4 (meilleur)</option>
+              <option value="claude-haiku-4-5-20251001">Haiku 4.5 (rapide)</option>
+            </select>
+          </div>
+        </div>
+        <div class="sr">
+          <div class="si"><div class="st">URL du Backend</div><div class="ss">Ton serveur Flask déployé sur Railway ou Render</div></div>
+          <div class="sc2"><input type="text" id="burl" placeholder="https://ton-app.railway.app" onchange="S.bk=this.value;sv();chkb()"></div>
+        </div>
+        <div class="sr">
+          <div class="si"><div class="st">Statut backend</div><div class="ss" id="bstat">Non testé</div></div>
+          <div class="sc2"><button class="btn btn-s" onclick="chkb()" style="width:100%">Tester →</button></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="ch"><span class="ct">🚀 Guide de déploiement du backend</span></div>
+      <div class="cb">
+        <div class="slbl">Option 1 — Railway.app (gratuit · le plus simple)</div>
+        <div class="codeblock">1. Crée un compte sur railway.app
+2. New Project → Deploy from GitHub repo
+   (fork d'abord : github.com/ton-compte/ctf-neural)
+3. Sélectionne le dossier "backend/" comme racine
+4. Railway détecte auto le Procfile → déploie
+5. Copie l'URL générée (ex: ctf-neural.up.railway.app)
+6. Colle-la dans le champ "URL Backend" ci-dessus</div>
+
+        <div class="div"></div>
+        <div class="slbl">Option 2 — Render.com (gratuit)</div>
+        <div class="codeblock">1. render.com → New → Web Service → Connect GitHub
+2. Root Directory : backend/
+3. Build Command : pip install -r requirements.txt
+4. Start Command : gunicorn app:app --bind 0.0.0.0:$PORT
+5. Copie l'URL et colle-la ci-dessus</div>
+
+        <div class="div"></div>
+        <div class="slbl">Option 3 — Local (développement)</div>
+        <div class="codeblock">cd backend/
+pip install -r requirements.txt
+python app.py
+# URL Backend = http://localhost:5000</div>
+
+        <div class="div"></div>
+        <div class="slbl">Héberger le frontend (optionnel)</div>
+        <div class="codeblock"># Netlify Drop (gratuit, 30 secondes)
+1. Va sur app.netlify.com/drop
+2. Glisse-dépose le fichier index.html
+3. Ton URL publique est générée instantanément
+
+# GitHub Pages
+1. Push index.html dans ton repo (dossier /docs)
+2. Settings → Pages → Branch: main, Folder: /docs</div>
+      </div>
+    </div>
+  </div>
+
+  </div><!-- /content -->
+</div><!-- /main -->
+</div><!-- /app -->
+
+<!-- MODAL API -->
+<div class="mbg h" id="mbg" onclick="closeModal()">
+  <div class="mo" onclick="event.stopPropagation()">
+    <div class="mt">🔑 Configuration API</div>
+    <div class="ms">
+      1. Va sur <strong>console.anthropic.com/settings/keys</strong><br>
+      2. Crée une nouvelle clé → copie-la<br>
+      3. Colle-la ci-dessous — elle reste dans ton navigateur
+    </div>
+    <div class="fg" style="margin-bottom:12px"><label>Clé API Anthropic</label><input type="password" id="akin" placeholder="sk-ant-api03-..."></div>
+    <div class="fg" style="margin-bottom:16px"><label>Modèle</label>
+      <select id="amin">
+        <option value="claude-sonnet-4-20250514">Claude Sonnet 4 — recommandé (équilibre vitesse/qualité)</option>
+        <option value="claude-opus-4-20250514">Claude Opus 4 — meilleur résultat (plus lent)</option>
+        <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 — rapide (défis simples)</option>
+      </select>
+    </div>
+    <div style="display:flex;gap:9px">
+      <button class="btn btn-g" onclick="saveApi()" style="flex:1">✓ Sauvegarder</button>
+      <button class="btn btn-s" onclick="closeModal()">Annuler</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── STATE ─────────────────────────────────────────────────────────────────────
+const S={key:'',model:'claude-sonnet-4-20250514',bk:'',file:null,fname:'',running:false,history:[],tokens:0,t0:0};
+
+// ── INIT ──────────────────────────────────────────────────────────────────────
+(function init(){
+  S.key   = localStorage.getItem('ctf_k')||'';
+  S.model = localStorage.getItem('ctf_m')||'claude-sonnet-4-20250514';
+  S.bk    = localStorage.getItem('ctf_b')||'';
+  try{S.history=JSON.parse(localStorage.getItem('ctf_h')||'[]');}catch(e){}
+  if(S.key) setApi('ready');
+  if(S.bk){document.getElementById('burl').value=S.bk;chkb();}
+  document.getElementById('msel').value=S.model;
+  renH(); updSt(); chkr();
+})();
+
+function sv(){localStorage.setItem('ctf_k',S.key);localStorage.setItem('ctf_m',S.model);localStorage.setItem('ctf_b',S.bk);}
+
+// ── API MODAL ─────────────────────────────────────────────────────────────────
+function showModal(){document.getElementById('mbg').classList.remove('h');}
+function closeModal(){document.getElementById('mbg').classList.add('h');}
+function saveApi(){
+  const k=document.getElementById('akin').value.trim();
+  const m=document.getElementById('amin').value;
+  if(!k.startsWith('sk-')){alert('Clé invalide — doit commencer par sk-');return;}
+  S.key=k;S.model=m;sv();setApi('ready');closeModal();
+  document.getElementById('msel').value=m;
+  document.getElementById('nowarn').classList.add('h');
+  chkr();
+}
+function setApi(st){
+  const d=document.getElementById('adot'),l=document.getElementById('albl');
+  if(st==='ready'){d.className='dot on';l.textContent=`API · ${S.model.split('-')[1]}`;}
+  else if(st==='busy'){d.className='dot busy';l.textContent='Analyse...';}
+  else{d.className='dot';l.textContent='Configurer API';}
+}
+
+// ── BACKEND CHECK ─────────────────────────────────────────────────────────────
+async function chkb(){
+  const url=S.bk||document.getElementById('burl').value.trim();
+  if(!url)return;
+  const el=document.getElementById('bstat'),sf=document.getElementById('sfb');
+  el.textContent='Vérification…';el.style.color='var(--mu)';
+  try{
+    const r=await fetch(url+'/health',{signal:AbortSignal.timeout(6000)});
+    const d=await r.json();
+    el.textContent=`✓ En ligne (v${d.version||'?'})`;el.style.color='var(--g)';
+    sf.textContent='✓ online';sf.style.color='var(--g)';
+    chkr();
+  }catch(e){
+    el.textContent=`✗ Hors ligne — ${e.message}`;el.style.color='var(--r)';
+    sf.textContent='✗ offline';sf.style.color='var(--r)';
+  }
+}
+
+// ── FILE HANDLING ─────────────────────────────────────────────────────────────
+function ddrag(e){e.preventDefault();document.getElementById('dz').classList.add('drag');}
+function udrag(){document.getElementById('dz').classList.remove('drag');}
+function drop(e){e.preventDefault();udrag();if(e.dataTransfer.files.length)setFile(e.dataTransfer.files[0]);}
+function onfi(e){if(e.target.files.length)setFile(e.target.files[0]);}
+function setFile(f){
+  S.file=f;S.fname=f.name;
+  const ext=f.name.split('.').pop().toUpperCase();
+  const dz=document.getElementById('dz');
+  dz.className='drop has';
+  document.getElementById('upt').textContent=f.name;
+  document.getElementById('ups').textContent=`${(f.size/1024).toFixed(1)} KB · ${ext}`;
+  document.getElementById('upok').textContent='✓ Prêt pour l\'analyse';
+  const tc=guessTag(f.name);
+  document.getElementById('ftag').innerHTML=`<span class="tag ${tc}">${ext}</span>`;
+  chkr();
+}
+function guessTag(n){
+  n=n.toLowerCase();
+  if(['.py','.js','.c','.rs','.go','.php','.rb'].some(e=>n.endsWith(e)))return 'tw';
+  if(['.pcap','.pcapng'].some(e=>n.endsWith(e)))return 'tf2';
+  return 'tr';
+}
+function clearAll(){
+  S.file=null;S.fname='';
+  document.getElementById('dz').className='drop';
+  document.getElementById('upt').textContent='Dépose ton fichier ici';
+  document.getElementById('ups').textContent='ELF · PE · ZIP · PCAP · Script · Image · Texte';
+  document.getElementById('upok').textContent='';
+  document.getElementById('ftag').innerHTML='';
+  document.getElementById('fi').value='';
+  document.getElementById('desc').value='';
+  document.getElementById('pts').value='';
+  ['pcard','tcard','fcard','rcard'].forEach(id=>document.getElementById(id).classList.add('h'));
+  chkr();
+}
+function chkr(){
+  const has=S.file||document.getElementById('desc').value.trim().length>5;
+  const ok=!!S.key&&!!S.bk&&has&&!S.running;
+  document.getElementById('sbtn').disabled=!ok;
+  document.getElementById('nowarn').classList.toggle('h',!!S.key&&!!S.bk);
+}
+
+// ── SOLVE ─────────────────────────────────────────────────────────────────────
+async function solve(){
+  if(S.running)return;
+  if(!S.bk){alert('Configure l\'URL Backend dans Paramètres.');showPage('settings',null);return;}
+  S.running=true;S.t0=Date.now();
+  document.getElementById('sbtn').disabled=true;
+  document.getElementById('runbadge').classList.remove('h');
+  setApi('busy');
+
+  ['pcard','tcard'].forEach(id=>document.getElementById(id).classList.remove('h'));
+  ['fcard','rcard'].forEach(id=>document.getElementById(id).classList.add('h'));
+  document.getElementById('tbod').innerHTML='';
+  rpipe();
+
+  const ti=setInterval(()=>{
+    const e=Math.floor((Date.now()-S.t0)/1000);
+    document.getElementById('ptmr').textContent=`● ${Math.floor(e/60)}m${String(e%60).padStart(2,'0')}s`;
+  },1000);
+
+  const fd=new FormData();
+  if(S.file) fd.append('file',S.file);
+  fd.append('description',document.getElementById('desc').value);
+  fd.append('category',document.getElementById('cat').value);
+  fd.append('model',S.model);
+
+  tlog('prompt','▸ CTF·NEURAL démarrage…');
+  tlog('info',`[*] ${S.fname||'texte'} · cat=${document.getElementById('cat').value} · model=${S.model}`);
+
+  let last=null;
+  try{
+    const resp=await fetch(S.bk+'/analyze',{
+      method:'POST',
+      headers:{'X-API-Key':S.key},
+      body:fd
+    });
+    if(!resp.ok){
+      const err=await resp.json().catch(()=>({error:'Erreur serveur HTTP '+resp.status}));
+      throw new Error(err.error||'HTTP '+resp.status);
+    }
+    const reader=resp.body.getReader();
+    const dec=new TextDecoder();
+    let buf='';
+    while(true){
+      const{done,value}=await reader.read();
+      if(done)break;
+      buf+=dec.decode(value,{stream:true});
+      const lines=buf.split('\n');
+      buf=lines.pop();
+      for(const line of lines){
+        if(!line.startsWith('data:'))continue;
+        try{
+          const{event,data}=JSON.parse(line.slice(5).trim());
+          if(event==='step'&&data.status) spipe(data.step,data.status);
+          if(event==='log') tlog(data.type,data.msg);
+          if(event==='error') tlog('err','[ERROR] '+data.msg);
+          if(event==='done') last=data;
+        }catch(e){}
+      }
+    }
+  }catch(e){
+    tlog('err','[ERROR] '+e.message);
+    document.getElementById('fcard').classList.remove('h');
+    document.getElementById('fbod').innerHTML=`<div style="color:var(--r);padding:8px 0;font-size:11px">${esc(e.message)}<br><br><span style="color:var(--mu)">Vérifie l'URL Backend dans Paramètres.</span></div>`;
+  }finally{
+    S.running=false;clearInterval(ti);
+    document.getElementById('ptmr').textContent='';
+    document.getElementById('runbadge').classList.add('h');
+    setApi('ready');chkr();
+  }
+
+  if(last){
+    S.tokens+=(last.tokens||0);
+    document.getElementById('sf2').textContent=S.tokens.toLocaleString();
+    showFindings(last);showResult(last);saveH(last);
+  }
+}
+
+// ── PIPELINE ──────────────────────────────────────────────────────────────────
+function rpipe(){for(let i=0;i<5;i++){document.getElementById('ps'+i).className='pc';document.getElementById('pl'+i).className='pl';}for(let i=0;i<4;i++)document.getElementById('pcon'+i).className='pcon';}
+function spipe(i,st){
+  document.getElementById('ps'+i).className='pc '+st;
+  document.getElementById('pl'+i).className='pl '+st;
+  if(st==='done'&&i<4) document.getElementById('pcon'+i).className='pcon done';
+  if(st==='active'&&i>0) document.getElementById('pcon'+(i-1)).className='pcon active';
+}
+
+// ── TERMINAL ──────────────────────────────────────────────────────────────────
+function tlog(t,msg){
+  const b=document.getElementById('tbod');
+  const d=document.createElement('div');d.className='tl';
+  const cls={ok:'t-ok',info:'t-info',warn:'t-warn',err:'t-err',dim:'t-dim',flag:'t-flag',prompt:'t-prompt'}[t]||'t-info';
+  d.innerHTML=`<span class="${cls}">${esc(msg)}</span>`;
+  b.appendChild(d);b.scrollTop=b.scrollHeight;
+}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+// ── FINDINGS ──────────────────────────────────────────────────────────────────
+function showFindings(data){
+  const card=document.getElementById('fcard');
+  card.classList.remove('h');
+  const r=data.recon||{};
+  const cat=r.category||'misc';
+  const tagcls={reverse:'tr',pwn:'tp2',web:'tw',crypto:'tc',forensics:'tf2',misc:'tf2'}[cat]||'tr';
+  document.getElementById('fbadge').innerHTML=`<span class="tag ${tagcls}">${cat.toUpperCase()}</span>`;
+
+  const col={reverse:'var(--p)',pwn:'var(--r)',web:'var(--c)',crypto:'var(--g)',forensics:'var(--a)',misc:'var(--mu)'}[cat]||'var(--g)';
+  let h='';
+  (r.key_observations||[]).forEach((o,i)=>{
+    h+=`<div class="fi"><div class="fi-ic" style="color:${col}">◉</div><div class="fi-body"><div class="fi-t">${esc(o)}</div></div><div class="conf conf-h">${Math.max(72,96-i*5)}%</div></div>`;
+  });
+  (r.protections||[]).forEach(p=>{
+    h+=`<div class="fi"><div class="fi-ic" style="color:var(--a)">⚠</div><div class="fi-body"><div class="fi-t">Protection: ${esc(p)}</div></div><div class="conf conf-m">actif</div></div>`;
+  });
+  if(r.main_hint) h+=`<div class="fi"><div class="fi-ic" style="color:var(--c)">💡</div><div class="fi-body"><div class="fi-t">Indice clé</div><div class="fi-d">${esc(r.main_hint)}</div></div></div>`;
+  const snip=(data.analysis||'').slice(0,280);
+  if(snip) h+=`<div class="fi"><div class="fi-ic" style="color:var(--mu)">🧠</div><div class="fi-body"><div class="fi-t">Analyse approfondie</div><div class="fi-d">${esc(snip)}…</div></div></div>`;
+  document.getElementById('fbod').innerHTML=h||'<div style="color:var(--mu);font-size:11px;padding:8px 0">Voir le terminal pour les détails.</div>';
+}
+
+// ── RESULT ────────────────────────────────────────────────────────────────────
+function showResult(data){
+  const card=document.getElementById('rcard');
+  card.classList.remove('h');
+  const elapsed=((Date.now()-S.t0)/1000).toFixed(1);
+  document.getElementById('rtime').textContent=`${elapsed}s · ${(data.tokens||0).toLocaleString()} tokens`;
+
+  const fr=data.flag||{};
+  let h='';
+
+  if(fr.flag){
+    h+=`<div class="flagbox"><div class="fl">🏆 Flag trouvé !</div><div class="fv2">${esc(fr.flag)}</div><button class="fcpy" onclick="cpy('${esc(fr.flag)}',this)">📋 Copier</button></div>`;
+  } else {
+    h+=`<div class="nofl">`;
+    h+=`<div style="font-size:10px;color:var(--a);font-weight:600;margin-bottom:5px">⚠ Flag non extrait statiquement</div>`;
+    if(fr.flag_format) h+=`<div style="font-size:10px;color:var(--mu)">Format attendu: <span style="color:var(--tx)">${esc(fr.flag_format)}</span></div>`;
+    if(fr.requires_runtime) h+=`<div style="font-size:10px;color:var(--mu);margin-top:4px">Requiert une exécution dynamique (serveur live ou binaire local).</div>`;
+    if(fr.next_steps) h+=`<div style="font-size:10px;color:var(--c);margin-top:5px">→ ${esc(fr.next_steps)}</div>`;
+    h+=`</div>`;
+  }
+
+  if(fr.writeup) h+=`<div style="margin-bottom:12px"><div class="slbl">Writeup</div><div style="font-size:11px;color:var(--tx);line-height:1.7;background:var(--bg3);border:1px solid var(--bord);border-radius:7px;padding:11px">${esc(fr.writeup)}</div></div>`;
+
+  // Script
+  const exploit=data.exploit||'';
+  const cm=exploit.match(/```(?:python|py)?\n([\s\S]*?)```/);
+  const code=cm?cm[1]:exploit.slice(0,4000);
+  h+=`<div style="margin-bottom:12px"><div class="slbl" style="display:flex;align-items:center;justify-content:space-between">Script de résolution<button class="fcpy" onclick="cpy(${JSON.stringify(code)},this)">📋 Copier script</button></div><div class="codeblock">${esc(code)}</div></div>`;
+
+  // Strategy
+  if(data.strategy) h+=`<div style="margin-bottom:12px"><div class="slbl">Stratégie complète</div><div class="codeblock" style="max-height:200px">${esc(data.strategy)}</div></div>`;
+
+  h+=`<div style="display:flex;gap:9px"><button class="btn btn-s" onclick="cpyAll()" style="flex:1">📄 Copier writeup complet</button><button class="btn btn-s" onclick="clearAll()">+ Nouveau défi</button></div>`;
+
+  document.getElementById('rbod').innerHTML=h;
+  window._ld=data;
+}
+
+function cpy(t,btn){
+  navigator.clipboard.writeText(t).then(()=>{const o=btn.textContent;btn.textContent='✓ Copié!';setTimeout(()=>btn.textContent=o,2000);}).catch(()=>prompt('Copie manuellement:',t));
+}
+function cpyAll(){
+  if(!window._ld)return;
+  const d=window._ld,fr=d.flag||{};
+  const txt=`# CTF·NEURAL Writeup\nFichier: ${S.fname}\n\n## Recon\n${JSON.stringify(d.recon,null,2)}\n\n## Analyse\n${d.analysis}\n\n## Stratégie\n${d.strategy}\n\n## Script\n${d.exploit}\n\n## Flag\n${fr.flag||'Non extrait'}\n\n## Résumé\n${fr.writeup||''}`;
+  navigator.clipboard.writeText(txt).then(()=>alert('Writeup complet copié !'));
+}
+
+// ── HISTORY ───────────────────────────────────────────────────────────────────
+function saveH(data){
+  const fr=data.flag||{};
+  S.history.unshift({
+    id:Date.now(),name:S.fname||'Texte',
+    cat:(data.recon||{}).category||'misc',
+    pts:parseInt(document.getElementById('pts').value)||0,
+    solved:!!fr.flag,flag:fr.flag||'',
+    writeup:fr.writeup||'',elapsed:((Date.now()-S.t0)/1000).toFixed(0),
+    ts:new Date().toLocaleString('fr-FR')
+  });
+  if(S.history.length>60) S.history=S.history.slice(0,60);
+  localStorage.setItem('ctf_h',JSON.stringify(S.history));
+  document.getElementById('hcnt').textContent=S.history.length;
+  updSt();
+}
+function updSt(){
+  const h=S.history,solved=h.filter(x=>x.solved).length;
+  document.getElementById('st1').textContent=solved;
+  document.getElementById('st2').textContent=h.length;
+  document.getElementById('st3').textContent=h.filter(x=>x.solved).reduce((a,x)=>a+x.pts,0);
+  document.getElementById('st4').textContent=(h.length?Math.round(solved/h.length*100):0)+'%';
+  document.getElementById('sf1').textContent=solved;
+}
+function renH(){
+  const b=document.getElementById('hbod');
+  if(!S.history.length){b.innerHTML='<div style="text-align:center;color:var(--mu);padding:28px 0;font-size:11px">Aucun défi analysé.</div>';return;}
+  const catcls={reverse:'tr',pwn:'tp2',web:'tw',crypto:'tc',forensics:'tf2',misc:'tf2'};
+  b.innerHTML=S.history.map(h=>`
+    <div class="hi" onclick="alert('Résumé: '+${JSON.stringify(h.writeup||'Voir terminal')})">
+      <div class="hdot" style="background:${h.solved?'var(--g)':'var(--a)'}"></div>
+      <div class="hin">
+        <div class="hname">${esc(h.name)}</div>
+        <div class="hmeta"><span class="tag ${catcls[h.cat]||'tr'}">${h.cat}</span> · ${h.ts} · ${h.elapsed}s</div>
+      </div>
+      <div class="hflag">${h.flag?esc(h.flag):'—'}</div>
+      <div class="hpts" style="color:${h.pts?'var(--g)':'var(--mu)'}">${h.pts||'?'}pts</div>
+    </div>`).join('');
+}
+function clrHist(){if(confirm('Effacer l\'historique ?')){S.history=[];localStorage.removeItem('ctf_h');renH();updSt();}}
+
+// ── NAV ───────────────────────────────────────────────────────────────────────
+function showPage(id,btn){
+  document.querySelectorAll('.pg').forEach(p=>p.classList.remove('on'));
+  document.querySelectorAll('.nb').forEach(b=>b.classList.remove('on'));
+  document.getElementById('pg-'+id).classList.add('on');
+  if(btn) btn.classList.add('on');
+  if(id==='history') renH();
+}
+function qa(cat){
+  document.getElementById('cat').value=cat;
+  showPage('solve',document.querySelector('.nb'));
+  document.querySelector('.nb').classList.add('on');
+  document.getElementById('desc').focus();
+}
+</script>
+</body>
+</html>
