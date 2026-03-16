@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
-import anthropic, json, zipfile, re, os, tempfile
+from groq import Groq
+import json, zipfile, re, os, tempfile
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
@@ -102,17 +103,18 @@ def detect_category(content, description, hint):
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({"status": "ok", "version": "3.1", "service": "ctf-neural"})
+    return jsonify({"status": "ok", "version": "3.1-groq", "service": "ctf-neural"})
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
     api_key = request.headers.get('X-API-Key', '')
-    if not api_key or not api_key.startswith('sk-'):
-        return jsonify({"error": "Clé API manquante ou invalide"}), 401
+    # Groq keys start with "gsk_"
+    if not api_key or not api_key.startswith('gsk_'):
+        return jsonify({"error": "Clé API Groq manquante ou invalide (doit commencer par gsk_)"}), 401
 
     description = request.form.get('description', '').strip()
     category    = request.form.get('category', 'auto')
-    model       = request.form.get('model', 'claude-sonnet-4-20250514')
+    model       = request.form.get('model', 'llama-3.3-70b-versatile')
 
     content = {
         "name": "texte-libre", "size": len(description),
@@ -141,8 +143,22 @@ def analyze():
     ctx = build_context(content, description)
     system = AGENT_PROMPTS.get(category, AGENT_PROMPTS["misc"]) + "\n\nTu es un expert CTF de niveau compétition mondiale. Tes réponses sont précises, techniques et actionnables. Tu génères du code Python fonctionnel."
 
+    def groq_call(client, model, system, user_content, max_tokens):
+        """Helper: call Groq API and return (text, tokens_used)"""
+        resp = client.chat.completions.create(
+            model=model,
+            max_tokens=max_tokens,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user",   "content": user_content}
+            ]
+        )
+        text   = resp.choices[0].message.content
+        tokens = resp.usage.prompt_tokens + resp.usage.completion_tokens
+        return text, tokens
+
     def generate():
-        client = anthropic.Anthropic(api_key=api_key)
+        client = Groq(api_key=api_key)
         total_tokens = 0
         results = {}
 
@@ -158,9 +174,7 @@ def analyze():
         # ── STEP 0: RECON ────────────────────────────────────────────────────
         yield sse("step", {"step": 0, "status": "active", "label": "Reconnaissance"})
         try:
-            msg = client.messages.create(
-                model=model, max_tokens=700, system=system,
-                messages=[{"role": "user", "content": f"""Analyse ce défi CTF et classifie-le précisément.
+            raw, toks = groq_call(client, model, system, f"""Analyse ce défi CTF et classifie-le précisément.
 
 {ctx}
 
@@ -180,10 +194,8 @@ Réponds UNIQUEMENT en JSON valide (pas de markdown, pas de texte avant/après):
   "attack_surface": "description courte de la surface d'attaque",
   "main_hint": "indice principal le plus important pour résoudre",
   "confidence": 95
-}}"""}]
-            )
-            total_tokens += msg.usage.input_tokens + msg.usage.output_tokens
-            raw = msg.content[0].text
+}}""", max_tokens=700)
+            total_tokens += toks
             try:
                 results["recon"] = json.loads(re.search(r'\{[\s\S]*\}', raw).group())
             except:
@@ -210,9 +222,7 @@ Réponds UNIQUEMENT en JSON valide (pas de markdown, pas de texte avant/après):
         # ── STEP 1: ANALYSE ──────────────────────────────────────────────────
         yield sse("step", {"step": 1, "status": "active", "label": "Analyse approfondie"})
         try:
-            msg = client.messages.create(
-                model=model, max_tokens=2200, system=system,
-                messages=[{"role": "user", "content": f"""Analyse technique approfondie de ce défi CTF.
+            raw, toks = groq_call(client, model, system, f"""Analyse technique approfondie de ce défi CTF.
 
 {ctx}
 
@@ -227,10 +237,9 @@ Analyse détaillée:
 6. **Outils recommandés**: liste spécifique avec commandes d'usage
 7. **Pièges possibles**: anti-debug, fausses pistes, obfuscation
 
-Sois très précis et technique. Cite des éléments spécifiques du code/binaire."""}]
-            )
-            total_tokens += msg.usage.input_tokens + msg.usage.output_tokens
-            results["analysis"] = msg.content[0].text
+Sois très précis et technique. Cite des éléments spécifiques du code/binaire.""", max_tokens=2200)
+            total_tokens += toks
+            results["analysis"] = raw
             yield sse("step", {"step": 1, "status": "done"})
             yield sse("log", {"type": "ok", "msg": "[+] Analyse technique complète"})
             for line in results["analysis"].split('\n')[:5]:
@@ -244,9 +253,7 @@ Sois très précis et technique. Cite des éléments spécifiques du code/binair
         # ── STEP 2: STRATÉGIE ────────────────────────────────────────────────
         yield sse("step", {"step": 2, "status": "active", "label": "Stratégie d'attaque"})
         try:
-            msg = client.messages.create(
-                model=model, max_tokens=1600, system=system,
-                messages=[{"role": "user", "content": f"""Stratégie de résolution step-by-step pour ce défi CTF.
+            raw, toks = groq_call(client, model, system, f"""Stratégie de résolution step-by-step pour ce défi CTF.
 
 Défi: {ctx[:3500]}
 Analyse: {results['analysis'][:1500]}
@@ -266,10 +273,9 @@ Fournis:
 
 **Construction du flag**: comment obtenir la valeur finale
 
-Sois 100% concret avec du vrai code exécutable."""}]
-            )
-            total_tokens += msg.usage.input_tokens + msg.usage.output_tokens
-            results["strategy"] = msg.content[0].text
+Sois 100% concret avec du vrai code exécutable.""", max_tokens=1600)
+            total_tokens += toks
+            results["strategy"] = raw
             yield sse("step", {"step": 2, "status": "done"})
             yield sse("log", {"type": "ok", "msg": "[+] Stratégie d'attaque définie"})
         except Exception as e:
@@ -280,9 +286,7 @@ Sois 100% concret avec du vrai code exécutable."""}]
         # ── STEP 3: EXPLOIT ──────────────────────────────────────────────────
         yield sse("step", {"step": 3, "status": "active", "label": "Génération exploit"})
         try:
-            msg = client.messages.create(
-                model=model, max_tokens=3000, system=system,
-                messages=[{"role": "user", "content": f"""Génère le script Python de résolution COMPLET et FONCTIONNEL pour ce défi CTF.
+            raw, toks = groq_call(client, model, system, f"""Génère le script Python de résolution COMPLET et FONCTIONNEL pour ce défi CTF.
 
 Défi: {ctx[:4500]}
 Analyse: {results['analysis'][:1200]}
@@ -310,10 +314,9 @@ if __name__ == "__main__":
     main()
 ```
 
-Le script doit être directement exécutable sans modification (sauf HOST/PORT si remote)."""}]
-            )
-            total_tokens += msg.usage.input_tokens + msg.usage.output_tokens
-            results["exploit"] = msg.content[0].text
+Le script doit être directement exécutable sans modification (sauf HOST/PORT si remote).""", max_tokens=3000)
+            total_tokens += toks
+            results["exploit"] = raw
             yield sse("step", {"step": 3, "status": "done"})
             yield sse("log", {"type": "ok", "msg": "[+] Script de résolution généré"})
             flag_in_code = re.search(r'FLAG[:\s]+([A-Za-z0-9_\-]+\{[^}]{3,80}\})', results["exploit"])
@@ -327,9 +330,7 @@ Le script doit être directement exécutable sans modification (sauf HOST/PORT s
         # ── STEP 4: FLAG ─────────────────────────────────────────────────────
         yield sse("step", {"step": 4, "status": "active", "label": "Extraction flag"})
         try:
-            msg = client.messages.create(
-                model=model, max_tokens=700, system=system,
-                messages=[{"role": "user", "content": f"""Synthèse finale pour ce défi CTF.
+            raw, toks = groq_call(client, model, system, f"""Synthèse finale pour ce défi CTF.
 
 Analyse: {results['analysis'][:700]}
 Script généré: {results['exploit'][:1200]}
@@ -346,10 +347,8 @@ Réponds UNIQUEMENT en JSON valide:
 }}
 
 Si le flag est calculable statiquement depuis le code, indique-le dans 'flag'.
-Sinon mets null et explique dans 'next_steps'."""}]
-            )
-            total_tokens += msg.usage.input_tokens + msg.usage.output_tokens
-            raw = msg.content[0].text
+Sinon mets null et explique dans 'next_steps'.""", max_tokens=700)
+            total_tokens += toks
             try:
                 results["flag_data"] = json.loads(re.search(r'\{[\s\S]*\}', raw).group())
             except:
