@@ -173,7 +173,7 @@ textarea{resize:vertical;min-height:70px}
 /* ─── MODAL ──────────────────────────────────────────── */
 .mbg{position:fixed;inset:0;background:rgba(0,0,0,.8);display:flex;align-items:center;justify-content:center;z-index:999;padding:18px}
 .mbg.h{display:none}
-.mo{background:var(--bg2);border:1px solid var(--bord2);border-radius:12px;padding:22px;width:400px;max-width:100%}
+.mo{background:var(--bg2);border:1px solid var(--bord2);border-radius:12px;padding:22px;width:420px;max-width:100%}
 .mt{font-family:var(--sans);font-size:15px;font-weight:700;margin-bottom:5px}
 .ms{font-size:10px;color:var(--mu);margin-bottom:16px;line-height:1.6}
 
@@ -189,6 +189,9 @@ textarea{resize:vertical;min-height:70px}
 .div{height:1px;background:var(--bord);margin:12px 0}
 .slbl{font-size:9px;text-transform:uppercase;letter-spacing:.12em;color:var(--mu);margin-bottom:8px}
 .warn-txt{font-size:9px;color:var(--a)}
+
+/* ─── GROQ BADGE ─────────────────────────────────────── */
+.groq-badge{font-size:8px;padding:2px 8px;border-radius:10px;background:rgba(249,115,22,.1);border:1px solid rgba(249,115,22,.3);color:#f97316;letter-spacing:.05em}
 </style>
 </head>
 <body>
@@ -198,7 +201,7 @@ textarea{resize:vertical;min-height:70px}
 <div class="sb">
   <div class="sb-logo">
     <div class="logo">AI</div>
-    <div><div class="tn" style="font-size:11px">CTF·NEURAL</div><div class="tv">v3.1 beta</div></div>
+    <div><div class="tn" style="font-size:11px">CTF·NEURAL</div><div class="tv">v3.1 groq</div></div>
   </div>
   <div class="sb-sec">
     <div class="sb-lbl">Plateforme</div>
@@ -217,7 +220,8 @@ textarea{resize:vertical;min-height:70px}
   <div class="sb-foot">
     Résolus: <span class="fv" id="sf1">0</span><br>
     Tokens: <span class="fv" id="sf2">0</span><br>
-    Backend: <span class="fv" id="sfb">—</span>
+    Backend: <span class="fv" id="sfb">—</span><br>
+    <span style="color:#f97316">⚡ Powered by Groq</span>
   </div>
 </div>
 
@@ -228,13 +232,14 @@ textarea{resize:vertical;min-height:70px}
   <div class="tb">
     <div class="logo" style="width:24px;height:24px;font-size:9px">AI</div>
     <div><div class="tn">CTF·NEURAL</div><div class="tv" style="font-size:7px">Automated Solve Platform</div></div>
+    <span class="groq-badge">GROQ FREE</span>
     <div class="gap"></div>
     <div id="runbadge" class="h" style="display:flex;align-items:center;gap:6px;font-size:9px;color:var(--a)">
       <div class="dot busy"></div><span id="runlbl">En cours…</span>
     </div>
     <div class="api-btn" onclick="showModal()">
       <div class="dot" id="adot"></div>
-      <span id="albl">Configurer API</span>
+      <span id="albl">Configurer API Groq</span>
     </div>
   </div>
 
@@ -276,7 +281,7 @@ textarea{resize:vertical;min-height:70px}
         <div class="btn-row">
           <button class="btn btn-g" id="sbtn" onclick="solve()" disabled>▸ Lancer l'analyse</button>
           <button class="btn btn-s" onclick="clearAll()">✕ Effacer</button>
-          <span class="warn-txt" id="nowarn">⚠ Configure API + Backend →</span>
+          <span class="warn-txt" id="nowarn">⚠ Configure API Groq + Backend →</span>
         </div>
       </div>
     </div>
@@ -307,7 +312,7 @@ textarea{resize:vertical;min-height:70px}
           <div class="td" style="background:#ffbd2e"></div>
           <div class="td" style="background:#28c840"></div>
         </div>
-        <span style="font-size:9px;color:var(--mu);margin-left:7px">ctf-neural · agent · live</span>
+        <span style="font-size:9px;color:var(--mu);margin-left:7px">ctf-neural · groq · live</span>
         <button onclick="document.getElementById('tbod').innerHTML=''" style="margin-left:auto;background:none;border:none;color:var(--mu);cursor:pointer;font-size:9px;font-family:var(--mono)">clear</button>
       </div>
       <div class="tbod" id="tbod"></div>
@@ -347,16 +352,17 @@ textarea{resize:vertical;min-height:70px}
       <div class="ch"><span class="ct">⚙ Paramètres</span></div>
       <div class="cb">
         <div class="sr">
-          <div class="si"><div class="st">Clé API Anthropic</div><div class="ss">Stockée dans le navigateur. Jamais transmise à nos serveurs.</div></div>
+          <div class="si"><div class="st">Clé API Groq</div><div class="ss">Gratuite sur console.groq.com · Commence par gsk_ · Stockée dans le navigateur</div></div>
           <div class="sc2"><button class="btn btn-g" onclick="showModal()" style="width:100%">🔑 Configurer →</button></div>
         </div>
         <div class="sr">
-          <div class="si"><div class="st">Modèle Claude</div><div class="ss">Sonnet = équilibré · Opus = plus puissant · Haiku = rapide</div></div>
+          <div class="si"><div class="st">Modèle Groq</div><div class="ss">Llama 3.3 70B = meilleur · 8B = ultra rapide · Mixtral = alternatif</div></div>
           <div class="sc2">
             <select id="msel" onchange="S.model=this.value;sv()">
-              <option value="claude-sonnet-4-20250514">Sonnet 4 (recommandé)</option>
-              <option value="claude-opus-4-20250514">Opus 4 (meilleur)</option>
-              <option value="claude-haiku-4-5-20251001">Haiku 4.5 (rapide)</option>
+              <option value="llama-3.3-70b-versatile">Llama 3.3 70B (recommandé)</option>
+              <option value="llama-3.1-8b-instant">Llama 3.1 8B (ultra rapide)</option>
+              <option value="mixtral-8x7b-32768">Mixtral 8x7B (alternatif)</option>
+              <option value="llama3-70b-8192">Llama 3 70B (stable)</option>
             </select>
           </div>
         </div>
@@ -372,16 +378,22 @@ textarea{resize:vertical;min-height:70px}
     </div>
 
     <div class="card">
-      <div class="ch"><span class="ct">🚀 Guide de déploiement du backend</span></div>
+      <div class="ch"><span class="ct">🚀 Guide déploiement backend + clé Groq</span></div>
       <div class="cb">
+        <div class="slbl">Étape 0 — Obtenir la clé Groq GRATUITE</div>
+        <div class="codeblock">1. Va sur console.groq.com
+2. Crée un compte (GitHub ou email)
+3. API Keys → Create API Key
+4. Copie la clé (commence par gsk_...)
+5. Colle-la dans "Configurer API Groq" ci-dessus</div>
+
+        <div class="div"></div>
         <div class="slbl">Option 1 — Railway.app (gratuit · le plus simple)</div>
         <div class="codeblock">1. Crée un compte sur railway.app
 2. New Project → Deploy from GitHub repo
-   (fork d'abord : github.com/ton-compte/ctf-neural)
-3. Sélectionne le dossier "backend/" comme racine
+3. Sélectionne le dossier backend/ comme racine
 4. Railway détecte auto le Procfile → déploie
-5. Copie l'URL générée (ex: ctf-neural.up.railway.app)
-6. Colle-la dans le champ "URL Backend" ci-dessus</div>
+5. Copie l'URL générée et colle-la ci-dessus</div>
 
         <div class="div"></div>
         <div class="slbl">Option 2 — Render.com (gratuit)</div>
@@ -394,20 +406,9 @@ textarea{resize:vertical;min-height:70px}
         <div class="div"></div>
         <div class="slbl">Option 3 — Local (développement)</div>
         <div class="codeblock">cd backend/
-pip install -r requirements.txt
+pip install flask flask-cors groq werkzeug gunicorn
 python app.py
 # URL Backend = http://localhost:5000</div>
-
-        <div class="div"></div>
-        <div class="slbl">Héberger le frontend (optionnel)</div>
-        <div class="codeblock"># Netlify Drop (gratuit, 30 secondes)
-1. Va sur app.netlify.com/drop
-2. Glisse-dépose le fichier index.html
-3. Ton URL publique est générée instantanément
-
-# GitHub Pages
-1. Push index.html dans ton repo (dossier /docs)
-2. Settings → Pages → Branch: main, Folder: /docs</div>
       </div>
     </div>
   </div>
@@ -416,21 +417,23 @@ python app.py
 </div><!-- /main -->
 </div><!-- /app -->
 
-<!-- MODAL API -->
+<!-- MODAL API GROQ -->
 <div class="mbg h" id="mbg" onclick="closeModal()">
   <div class="mo" onclick="event.stopPropagation()">
-    <div class="mt">🔑 Configuration API</div>
+    <div class="mt">🔑 Configuration API Groq (Gratuit)</div>
     <div class="ms">
-      1. Va sur <strong>console.anthropic.com/settings/keys</strong><br>
-      2. Crée une nouvelle clé → copie-la<br>
-      3. Colle-la ci-dessous — elle reste dans ton navigateur
+      1. Va sur <strong>console.groq.com</strong> → API Keys<br>
+      2. Clique <strong>Create API Key</strong> → copie-la<br>
+      3. Colle-la ci-dessous — elle commence par <strong>gsk_</strong><br>
+      <span style="color:#f97316">⚡ Groq est 100% gratuit avec un compte</span>
     </div>
-    <div class="fg" style="margin-bottom:12px"><label>Clé API Anthropic</label><input type="password" id="akin" placeholder="sk-ant-api03-..."></div>
+    <div class="fg" style="margin-bottom:12px"><label>Clé API Groq</label><input type="password" id="akin" placeholder="gsk_..."></div>
     <div class="fg" style="margin-bottom:16px"><label>Modèle</label>
       <select id="amin">
-        <option value="claude-sonnet-4-20250514">Claude Sonnet 4 — recommandé (équilibre vitesse/qualité)</option>
-        <option value="claude-opus-4-20250514">Claude Opus 4 — meilleur résultat (plus lent)</option>
-        <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 — rapide (défis simples)</option>
+        <option value="llama-3.3-70b-versatile">Llama 3.3 70B — recommandé (meilleur résultat)</option>
+        <option value="llama-3.1-8b-instant">Llama 3.1 8B — ultra rapide (défis simples)</option>
+        <option value="mixtral-8x7b-32768">Mixtral 8x7B — alternatif</option>
+        <option value="llama3-70b-8192">Llama 3 70B — stable</option>
       </select>
     </div>
     <div style="display:flex;gap:9px">
@@ -442,12 +445,12 @@ python app.py
 
 <script>
 // ── STATE ─────────────────────────────────────────────────────────────────────
-const S={key:'',model:'claude-sonnet-4-20250514',bk:'',file:null,fname:'',running:false,history:[],tokens:0,t0:0};
+const S={key:'',model:'llama-3.3-70b-versatile',bk:'',file:null,fname:'',running:false,history:[],tokens:0,t0:0};
 
 // ── INIT ──────────────────────────────────────────────────────────────────────
 (function init(){
   S.key   = localStorage.getItem('ctf_k')||'';
-  S.model = localStorage.getItem('ctf_m')||'claude-sonnet-4-20250514';
+  S.model = localStorage.getItem('ctf_m')||'llama-3.3-70b-versatile';
   S.bk    = localStorage.getItem('ctf_b')||'';
   try{S.history=JSON.parse(localStorage.getItem('ctf_h')||'[]');}catch(e){}
   if(S.key) setApi('ready');
@@ -464,7 +467,7 @@ function closeModal(){document.getElementById('mbg').classList.add('h');}
 function saveApi(){
   const k=document.getElementById('akin').value.trim();
   const m=document.getElementById('amin').value;
-  if(!k.startsWith('sk-')){alert('Clé invalide — doit commencer par sk-');return;}
+  if(!k.startsWith('gsk_')){alert('Clé invalide — doit commencer par gsk_\n\nVa sur console.groq.com pour obtenir une clé gratuite.');return;}
   S.key=k;S.model=m;sv();setApi('ready');closeModal();
   document.getElementById('msel').value=m;
   document.getElementById('nowarn').classList.add('h');
@@ -472,9 +475,9 @@ function saveApi(){
 }
 function setApi(st){
   const d=document.getElementById('adot'),l=document.getElementById('albl');
-  if(st==='ready'){d.className='dot on';l.textContent=`API · ${S.model.split('-')[1]}`;}
+  if(st==='ready'){d.className='dot on';l.textContent=`Groq · ${S.model.split('-').slice(0,3).join('-')}`;}
   else if(st==='busy'){d.className='dot busy';l.textContent='Analyse...';}
-  else{d.className='dot';l.textContent='Configurer API';}
+  else{d.className='dot';l.textContent='Configurer API Groq';}
 }
 
 // ── BACKEND CHECK ─────────────────────────────────────────────────────────────
@@ -680,13 +683,11 @@ function showResult(data){
 
   if(fr.writeup) h+=`<div style="margin-bottom:12px"><div class="slbl">Writeup</div><div style="font-size:11px;color:var(--tx);line-height:1.7;background:var(--bg3);border:1px solid var(--bord);border-radius:7px;padding:11px">${esc(fr.writeup)}</div></div>`;
 
-  // Script
   const exploit=data.exploit||'';
   const cm=exploit.match(/```(?:python|py)?\n([\s\S]*?)```/);
   const code=cm?cm[1]:exploit.slice(0,4000);
   h+=`<div style="margin-bottom:12px"><div class="slbl" style="display:flex;align-items:center;justify-content:space-between">Script de résolution<button class="fcpy" onclick="cpy(${JSON.stringify(code)},this)">📋 Copier script</button></div><div class="codeblock">${esc(code)}</div></div>`;
 
-  // Strategy
   if(data.strategy) h+=`<div style="margin-bottom:12px"><div class="slbl">Stratégie complète</div><div class="codeblock" style="max-height:200px">${esc(data.strategy)}</div></div>`;
 
   h+=`<div style="display:flex;gap:9px"><button class="btn btn-s" onclick="cpyAll()" style="flex:1">📄 Copier writeup complet</button><button class="btn btn-s" onclick="clearAll()">+ Nouveau défi</button></div>`;
