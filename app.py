@@ -204,11 +204,38 @@ def detect_category(info, description, hint):
     return "reverse"
 
 # ── GEMINI API ────────────────────────────────────────────────────────────────
+# Modèles confirmés actifs au 16 mars 2026
 GROQ_MODELS = [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-70b-versatile",
-    "llama3-groq-70b-8192-tool-use-preview",
+    "llama-3.3-70b-versatile",   # meilleur modèle — actif
+    "llama-3.1-8b-instant",       # fallback rapide — actif
+    "gemma2-9b-it",                # fallback léger — actif
 ]
+
+def get_groq_models(api_key):
+    """Récupère la liste des modèles actifs depuis l'API Groq."""
+    try:
+        resp = requests.get(
+            "https://api.groq.com/openai/v1/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=5
+        )
+        if resp.status_code == 200:
+            models = resp.json().get("data", [])
+            # Garde seulement les LLM actifs (pas whisper, guard, etc.)
+            llm_ids = [
+                m["id"] for m in models
+                if m.get("active")
+                and "whisper" not in m["id"]
+                and "guard" not in m["id"]
+                and "tts" not in m["id"]
+            ]
+            # Prioritise llama-3.3 en premier
+            preferred = [m for m in llm_ids if "llama-3.3" in m]
+            others    = [m for m in llm_ids if "llama-3.3" not in m]
+            return (preferred + others)[:4] if preferred else GROQ_MODELS
+    except:
+        pass
+    return GROQ_MODELS
 
 def call_groq(api_key, prompt, system="", max_tokens=8192):
     """Appel API Groq avec fallback sur plusieurs modèles."""
@@ -218,8 +245,11 @@ def call_groq(api_key, prompt, system="", max_tokens=8192):
     }
     sys_msg = system or "Tu es un expert CTF de niveau compétition mondiale. Tes réponses sont précises, techniques et actionnables. Tu génères du code Python fonctionnel."
 
+    # Essaie de récupérer les modèles actifs dynamiquement
+    models_to_try = get_groq_models(api_key)
+
     last_error = None
-    for model in GROQ_MODELS:
+    for model in models_to_try:
         try:
             payload = {
                 "model": model,
