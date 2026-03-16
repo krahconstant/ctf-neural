@@ -1,8 +1,7 @@
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
-import json, zipfile, re, os, tempfile, subprocess, base64, time, stat
+import json, zipfile, re, os, tempfile, subprocess, base64, time, stat, requests
 from werkzeug.utils import secure_filename
-import google.generativeai as genai
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}},
@@ -205,20 +204,60 @@ def detect_category(info, description, hint):
     return "reverse"
 
 # ── GEMINI API ────────────────────────────────────────────────────────────────
-def call_gemini(api_key, prompt, system="", max_tokens=8192):
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(
-        "gemini-2.0-flash",
-        system_instruction=system or "Tu es un expert CTF de niveau compétition mondiale."
-    )
-    response = model.generate_content(
-        prompt,
-        generation_config=genai.GenerationConfig(
-            max_output_tokens=max_tokens,
-            temperature=0.2,
-        )
-    )
-    return response.text
+GROQ_MODELS = [
+    "llama-3.3-70b-versatile",
+    "llama3-70b-8192",
+    "mixtral-8x7b-32768",
+]
+
+def call_groq(api_key, prompt, system="", max_tokens=8192):
+    """Appel API Groq avec fallback sur plusieurs modèles."""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    sys_msg = system or "Tu es un expert CTF de niveau compétition mondiale. Tes réponses sont précises, techniques et actionnables. Tu génères du code Python fonctionnel."
+
+    last_error = None
+    for model in GROQ_MODELS:
+        try:
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": sys_msg},
+                    {"role": "user",   "content": prompt},
+                ],
+                "max_tokens":  min(max_tokens, 8192),
+                "temperature": 0.2,
+            }
+            resp = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers=headers, json=payload, timeout=60
+            )
+            if resp.status_code == 200:
+                return resp.json()["choices"][0]["message"]["content"]
+            elif resp.status_code == 429:
+                # Rate limit sur ce modèle → essaie le suivant
+                last_error = f"Rate limit sur {model}"
+                time.sleep(2)
+                continue
+            else:
+                err = resp.json().get("error", {}).get("message", resp.text)
+                raise Exception(f"Groq {model}: {err}")
+        except requests.exceptions.Timeout:
+            last_error = f"Timeout sur {model}"
+            continue
+        except Exception as e:
+            if "rate" in str(e).lower() or "429" in str(e):
+                last_error = str(e)
+                time.sleep(2)
+                continue
+            raise
+
+    raise Exception(f"Tous les modèles Groq indisponibles. Dernière erreur: {last_error}")
+
+# Alias pour compatibilité avec le reste du code
+call_gemini = call_groq
 
 # ── EXTRACTION CODE PYTHON ────────────────────────────────────────────────────
 def extract_python(text):
@@ -248,10 +287,10 @@ def extract_flag(text):
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({
-        "status": "ok", "version": "4.0",
+        "status": "ok", "version": "4.1",
         "service": "ctf-neural",
         "tools": AVAILABLE_TOOLS,
-        "engine": "gemini-2.0-flash"
+        "engine": "groq/llama-3.3-70b"
     })
 
 @app.route('/analyze', methods=['POST', 'OPTIONS'])
