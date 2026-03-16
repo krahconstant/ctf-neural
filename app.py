@@ -1,654 +1,576 @@
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
-from groq import Groq
-import json, zipfile, re, os, tempfile, base64, hashlib, time
+import json, zipfile, re, os, tempfile, subprocess, base64, time, stat
 from werkzeug.utils import secure_filename
+import google.generativeai as genai
 
 app = Flask(__name__)
-CORS(app, origins="*")
+CORS(app, resources={r"/*": {"origins": "*"}},
+     allow_headers=["Content-Type", "X-API-Key", "X-Gemini-Key"],
+     methods=["GET", "POST", "OPTIONS"])
 
-UPLOAD_FOLDER = tempfile.mkdtemp()
+@app.after_request
+def after_request(response):
+    response.headers["Access-Control-Allow-Origin"]  = "*"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-API-Key, X-Gemini-Key"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    return response
 
-# ── SYSTEM PROMPTS PAR CATÉGORIE ─────────────────────────────────────────────
+UPLOAD_DIR = tempfile.mkdtemp()
+SANDBOX_DIR = tempfile.mkdtemp()
+MAX_SIZE = 20 * 1024 * 1024  # 20 MB
+
+# ── AGENT SYSTEM PROMPTS ──────────────────────────────────────────────────────
 AGENT_PROMPTS = {
-    "reverse": """Tu es un expert en reverse engineering de niveau mondial (CTF Top 10 global).
-Spécialités: ELF/PE/Mach-O, bytecode Python/Java/.NET, VM custom, obfuscation, anti-debug.
-Outils maîtrisés: Ghidra, IDA Pro, radare2, angr, unicorn, pwndbg, ltrace, strace, objdump, strings, file, binwalk.
-Techniques: décompilation, émulation, symbolic execution, patching binaire, keygen.
-Tu RÉSOUS le défi, tu ne te contentes pas de l'analyser. Tu génères le code qui trouve le flag.""",
-
-    "pwn": """Tu es un expert en binary exploitation de niveau mondial (CTF Top 10 global).
-Spécialités: stack/heap overflow, ROP chains, format string, use-after-free, kernel pwn, ASLR/PIE bypass.
-Outils maîtrisés: pwntools, ROPgadget, one_gadget, pwndbg, GDB, checksec, ropper.
-Tu identifies la vulnérabilité EXACTE, calcules les offsets, génères l'exploit pwntools complet.
-Tu RÉSOUS le défi avec un script fonctionnel.""",
-
-    "web": """Tu es un expert en web exploitation de niveau mondial (CTF Top 10 global).
-Spécialités: SQLi (blind/error/union), XSS, SSRF, SSTI (Jinja2/Twig/Pebble), JWT forging, LFI/RFI, 
-deserialization (PHP/Java/Python), IDOR, path traversal, prototype pollution, CORS abuse, OAuth.
-Outils: sqlmap, ffuf, burpsuite, nuclei, curl, Python requests.
-Tu identifies la vulnérabilité, génères le payload exact, et le script de récupération du flag.""",
-
-    "crypto": """Tu es un expert en cryptanalyse de niveau mondial (CTF Top 10 global).
-Spécialités: RSA (small e, wiener, fermat, common modulus, LSB oracle, padding oracle), AES (ECB, CBC bitflip, 
-padding oracle, GCM nonce reuse), ECC (invalid curve, DLP), DH (small subgroup, logjam), hash length extension,
-PRNG prediction, XOR (key recovery, many-time-pad), custom ciphers, encodages (base64/hex/rot/morse/bacon).
-Outils: SageMath, sympy, pycryptodome, RsaCtfTool, hashcat, CyberChef.
-Tu identifies la faiblesse mathématique EXACTE et génères l'attaque en Python.""",
-
-    "forensics": """Tu es un expert en forensics/stéganographie de niveau mondial (CTF Top 10 global).
-Spécialités: PCAP analysis (HTTP/DNS/FTP/SMTP extraction), memory forensics (volatility), disk forensics,
-stéganographie (PNG LSB, JPEG, WAV, PDF, docx), fichiers cachés, métadonnées, timestamps, carving.
-Outils: volatility3, wireshark/tshark, binwalk, steghide, zsteg, stegsolve, foremost, exiftool, 
-strings, file, xxd, pngcheck, identify, audacity (spectre), outguess.
-Tu identifies la technique de dissimulation et extrais les données cachées.""",
-
-    "misc": """Tu es un expert CTF polyvalent de niveau mondial (CTF Top 10 global).
-Spécialités: scripting (bash/python/perl), OSINT, blockchain (Ethereum/Solidity vulns), 
-jail escape (Python/Bash/Pyjail), QR codes, steganographie créative, protocoles custom,
-encodages exotiques (brainfuck, ook, malbolge, whitespace), puzzles logiques, trivia.
-Tu résous tout type de défi créatif avec ingéniosité.""",
+    "reverse":
+        "Tu es un expert CTF en reverse engineering. Tu analyses des binaires ELF/PE, "
+        "du bytecode, des VM custom. Tu maîtrises objdump, strings, ghidra, radare2, "
+        "pwndbg, angr, unicorn. Tu identifies les protections anti-debug, les algos "
+        "custom, et tu patches les binaires si nécessaire.",
+    "pwn":
+        "Tu es un expert CTF en binary exploitation. Tu exploites des binaires vulnérables "
+        "(stack overflow, heap, ROP chains, format string, UAF). Tu maîtrises pwntools, "
+        "ROPgadget, one_gadget. Tu génères des exploits Python fonctionnels avec pwntools.",
+    "web":
+        "Tu es un expert CTF en web exploitation. Tu exploites SQLi, XSS, SSRF, SSTI, "
+        "JWT bypass, LFI/RFI, deserialization, IDOR, OAuth flaws. Tu analyses le code "
+        "source PHP/Python/Node et tu génères des scripts d'exploitation.",
+    "crypto":
+        "Tu es un expert CTF en cryptanalyse. Tu attaques RSA (faible exposant, wiener, "
+        "fermat), AES (padding oracle, CBC bitflip), ECC, hash length extension, custom "
+        "ciphers. Tu maîtrises SageMath, pycryptodome, sympy, z3.",
+    "forensics":
+        "Tu es un expert CTF en forensics et stéganographie. Tu analyses des PCAP, "
+        "dumps mémoire, images disque, PNG/JPEG/WAV. Tu maîtrises volatility, wireshark, "
+        "binwalk, steghide, foremost, exiftool, zsteg.",
+    "misc":
+        "Tu es un expert CTF polyvalent. Tu résous des défis créatifs: scripting, OSINT, "
+        "blockchain, protocoles custom, escape game, puzzle, pyjail.",
 }
 
-GLOBAL_SYSTEM_SUFFIX = """
-FORMAT DU FLAG: MCTF{...} — c'est le seul format valide pour ce CTF.
+# ── OUTILS DISPONIBLES SUR LE SERVEUR ────────────────────────────────────────
+def check_tools():
+    tools = {}
+    for t in ["python3","strings","file","xxd","hexdump","binwalk",
+              "objdump","nm","readelf","ltrace","strace","gdb","nc"]:
+        tools[t] = subprocess.run(["which", t], capture_output=True).returncode == 0
+    return tools
 
-RÈGLES ABSOLUES:
-1. Tu RÉSOUS le défi, pas seulement tu l'analyses
-2. Ton code Python doit être EXÉCUTABLE tel quel (imports inclus)
-3. Si le flag est calculable statiquement: tu le calcules et l'affiches
-4. Tu cherches MCTF{...} dans TOUTES les sorties possibles
-5. Tu testes plusieurs approches si la première échoue
-6. Tu n'abandonnes jamais — tu trouves toujours un vecteur d'attaque
-"""
+AVAILABLE_TOOLS = check_tools()
 
-# ── EXTRACTION FICHIER ────────────────────────────────────────────────────────
-def extract_file_content(filepath, filename):
-    ext  = os.path.splitext(filename)[1].lower()
-    size = os.path.getsize(filepath)
-    result = {"name": filename, "size": size, "ext": ext,
-              "text": "", "hex": "", "strings": [], "files": [],
-              "b64": "", "entropy": 0.0}
-
-    TEXT_EXT = {'.py','.js','.ts','.c','.cpp','.h','.rs','.go','.java','.rb',
-                '.php','.html','.css','.sh','.md','.json','.xml','.yaml','.asm',
-                '.s','.txt','.sage','.pl','.lua','.nim','.kt','.cs','.r','.m',
-                '.swift','.vb','.ps1','.bat','.ex','.exs','.erl','.sol','.cairo',
-                '.move','.vy','.tf','.conf','.ini','.env','.toml'}
-
-    with open(filepath, 'rb') as f:
-        raw_bytes = f.read()
-
-    # Entropie Shannon
-    if raw_bytes:
-        freq = {}
-        for b in raw_bytes:
-            freq[b] = freq.get(b, 0) + 1
-        import math
-        entropy = -sum((c/len(raw_bytes)) * math.log2(c/len(raw_bytes)) for c in freq.values())
-        result["entropy"] = round(entropy, 2)
-
-    # Texte
+# ── EXÉCUTION SÉCURISÉE ───────────────────────────────────────────────────────
+def run_cmd(cmd, timeout=15, cwd=None, input_data=None):
+    """Exécute une commande avec timeout et capture output."""
     try:
-        if ext in TEXT_EXT or size < 500000:
-            result["text"] = raw_bytes.decode('utf-8', errors='replace')[:60000]
-            return result
-    except:
-        pass
+        result = subprocess.run(
+            cmd, shell=isinstance(cmd, str),
+            capture_output=True, text=True,
+            timeout=timeout, cwd=cwd or SANDBOX_DIR,
+            input=input_data,
+            env={**os.environ, "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        )
+        return {
+            "stdout": result.stdout[:8000],
+            "stderr": result.stderr[:2000],
+            "returncode": result.returncode,
+            "ok": True
+        }
+    except subprocess.TimeoutExpired:
+        return {"stdout": "", "stderr": f"Timeout après {timeout}s", "returncode": -1, "ok": False}
+    except Exception as e:
+        return {"stdout": "", "stderr": str(e), "returncode": -1, "ok": False}
 
-    # Binaire → hex + strings + b64 (petit fichier)
-    result["hex"] = ' '.join(f'{b:02x}' for b in raw_bytes[:2048])
-    s, strings = b"", []
-    for b in raw_bytes:
-        if 32 <= b < 127:
-            s += bytes([b])
-        else:
-            if len(s) >= 4:
-                strings.append(s.decode('ascii', errors='replace'))
-            s = b""
-    if len(s) >= 4:
-        strings.append(s.decode('ascii', errors='replace'))
-    result["strings"] = strings[:200]
+def run_python(code, timeout=20, cwd=None):
+    """Exécute du code Python dans un fichier temporaire."""
+    tmp = os.path.join(SANDBOX_DIR, f"script_{int(time.time()*1000)}.py")
+    try:
+        with open(tmp, "w") as f:
+            f.write(code)
+        result = run_cmd(["python3", tmp], timeout=timeout, cwd=cwd or SANDBOX_DIR)
+        return result
+    finally:
+        try: os.remove(tmp)
+        except: pass
 
-    # Petit binaire → base64 pour l'IA
-    if size <= 65536:
-        result["b64"] = base64.b64encode(raw_bytes).decode()
+# ── ANALYSE STATIQUE DU FICHIER ───────────────────────────────────────────────
+def static_analysis(filepath, filename):
+    ext = os.path.splitext(filename)[1].lower()
+    size = os.path.getsize(filepath)
+    info = {
+        "name": filename, "size": size, "ext": ext,
+        "text": "", "hex": "", "strings": [],
+        "files": [], "file_type": "", "analysis": {}
+    }
 
-    # ZIP → extraire contenu texte
-    if ext in ('.zip', '.jar', '.apk', '.docx', '.xlsx', '.pptx'):
+    # file command
+    r = run_cmd(["file", filepath])
+    info["file_type"] = r["stdout"].strip()
+
+    TEXT_EXT = {'.py','.js','.ts','.c','.cpp','.h','.rs','.go','.java',
+                '.rb','.php','.html','.css','.sh','.md','.json','.xml',
+                '.yaml','.asm','.s','.txt','.sage','.pl','.lua','.kt',
+                '.cs','.r','.m','.swift','.vb','.ps1','.bat','.ex','.exs'}
+
+    # Lecture texte
+    if ext in TEXT_EXT or size < 300000:
+        try:
+            with open(filepath, 'r', errors='replace') as f:
+                info["text"] = f.read(40000)
+        except:
+            pass
+
+    # Hex dump
+    if not info["text"]:
+        r = run_cmd(["xxd", filepath])
+        info["hex"] = r["stdout"][:6000] if r["ok"] else ""
+
+    # Strings
+    r = run_cmd(["strings", "-n", "4", filepath])
+    if r["ok"]:
+        info["strings"] = r["stdout"].split("\n")[:150]
+
+    # ZIP : extraire fichiers
+    if ext == '.zip':
         try:
             with zipfile.ZipFile(filepath) as z:
-                result["files"] = z.namelist()
+                info["files"] = z.namelist()
                 parts = []
-                for name in result["files"][:50]:
-                    if any(name.lower().endswith(e) for e in [
-                        '.py','.js','.c','.txt','.md','.json','.sh','.php','.html',
-                        '.sage','.rb','.rs','.go','.java','.cs','.ts','.sol','.vy',
-                        '.xml','.yaml','.toml','.conf','.env','.cfg','.ini','.log'
-                    ]):
+                for name in info["files"][:30]:
+                    if any(name.endswith(e) for e in ['.py','.js','.c','.txt','.md',
+                            '.json','.sh','.php','.html','.sage','.rb','.rs','.go','.java']):
                         try:
-                            content = z.read(name).decode('utf-8', errors='replace')[:8000]
+                            content = z.read(name).decode('utf-8', errors='replace')[:5000]
                             parts.append(f"=== {name} ===\n{content}")
                         except:
                             pass
                 if parts:
-                    result["text"] = "\n\n".join(parts)
+                    info["text"] = "\n\n".join(parts)
+                # Extraire tous les fichiers dans sandbox
+                z.extractall(SANDBOX_DIR)
         except Exception as e:
-            result["text"] = f"[Erreur ZIP: {e}]"
+            info["text"] = f"[Erreur ZIP: {e}]"
 
-    return result
+    # ELF : analyse binaire
+    if "ELF" in info["file_type"]:
+        os.chmod(filepath, stat.S_IRWXU)
+        r = run_cmd(["readelf", "-h", filepath])
+        info["analysis"]["readelf"] = r["stdout"][:2000]
+        r = run_cmd(["nm", "--demangle", filepath])
+        info["analysis"]["symbols"] = r["stdout"][:3000]
+        r = run_cmd(["objdump", "-d", "--no-show-raw-insn", filepath])
+        info["analysis"]["disasm"] = r["stdout"][:8000]
 
-def build_context(content, description):
-    ctx = f"=== DÉFI CTF ===\n"
-    ctx += f"Fichier: {content['name']} ({content['size']} octets, ext: {content['ext']})\n"
-    if content.get("entropy"):
-        ctx += f"Entropie: {content['entropy']}/8.0"
-        if content['entropy'] > 7.0:
-            ctx += " (HAUTE → probablement chiffré/compressé)"
-        elif content['entropy'] < 3.0:
-            ctx += " (BASSE → texte ou données simples)"
-        ctx += "\n"
+    # PCAP
+    if ext in ['.pcap', '.pcapng']:
+        r = run_cmd(["strings", filepath])
+        info["analysis"]["pcap_strings"] = r["stdout"][:5000]
 
-    if content["files"]:
-        ctx += f"Contenu archive ({len(content['files'])} fichiers): {', '.join(content['files'][:50])}\n"
+    return info
 
-    if content["text"]:
-        ctx += f"\n--- CONTENU ---\n```\n{content['text'][:24000]}\n```\n"
-    elif content["b64"]:
-        ctx += f"\n--- CONTENU BASE64 (petit binaire) ---\n{content['b64'][:8000]}\n"
-        ctx += f"\n--- HEX DUMP ---\n{content['hex'][:3000]}\n"
-        if content["strings"]:
-            ctx += f"\n--- STRINGS ({len(content['strings'])} trouvées) ---\n"
-            ctx += "\n".join(content["strings"][:100])
-    elif content["hex"]:
-        ctx += f"\n--- HEX DUMP (2KB) ---\n{content['hex']}\n"
-        if content["strings"]:
-            ctx += f"\n--- STRINGS ({len(content['strings'])} trouvées) ---\n"
-            ctx += "\n".join(content["strings"][:100])
-
+def build_context(info, description):
+    ctx = f"Fichier: {info['name']} ({info['size']} octets)\n"
+    ctx += f"Type: {info['file_type']}\n"
+    if info["files"]:
+        ctx += f"Contenu archive: {', '.join(info['files'][:40])}\n"
+    if info["text"]:
+        ctx += f"\nContenu:\n```\n{info['text'][:18000]}\n```\n"
+    elif info["hex"]:
+        ctx += f"\nHex dump:\n{info['hex'][:4000]}\n"
+    if info["strings"]:
+        ctx += f"\nStrings extraites:\n{chr(10).join(info['strings'][:80])}\n"
+    for k, v in info.get("analysis", {}).items():
+        if v:
+            ctx += f"\n{k.upper()}:\n{v[:3000]}\n"
     if description:
-        ctx += f"\n--- DESCRIPTION / ÉNONCÉ ---\n{description}\n"
-
-    ctx += "\n=== FIN DÉFI ==="
+        ctx += f"\nDescription: {description}\n"
     return ctx
 
-def detect_category(content, description, hint):
+def detect_category(info, description, hint):
     if hint and hint != "auto":
         return hint
-    text = (content.get("text","") + " ".join(content.get("strings",[])) + description).lower()
-    ext  = content.get("ext","")
-    name = content.get("name","").lower()
+    text = (info.get("text","") + " ".join(info.get("strings",[])) + description + info.get("file_type","")).lower()
+    ext = info.get("ext","")
+    if ext in ['.pcap','.pcapng','.cap']:
+        return "forensics"
+    if "ELF" in info.get("file_type","") or "PE32" in info.get("file_type",""):
+        if any(k in text for k in ["overflow","rop","heap","got","plt","libc","shellcode","ret2"]):
+            return "pwn"
+        return "reverse"
+    if any(k in text for k in ["rsa","aes","encrypt","decrypt","cipher","hash","modulus","prime","elliptic","xor"]):
+        return "crypto"
+    if any(k in text for k in ["http","sql","xss","login","cookie","jwt","flask","django","php","mysql"]):
+        return "web"
+    if any(k in text for k in ["steg","hidden","lsb","png","jpeg","wav","mp3","binwalk"]):
+        return "forensics"
+    return "reverse"
 
-    scores = {"reverse": 0, "pwn": 0, "web": 0, "crypto": 0, "forensics": 0, "misc": 0}
+# ── GEMINI API ────────────────────────────────────────────────────────────────
+def call_gemini(api_key, prompt, system="", max_tokens=8192):
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(
+        "gemini-2.0-flash",
+        system_instruction=system or "Tu es un expert CTF de niveau compétition mondiale."
+    )
+    response = model.generate_content(
+        prompt,
+        generation_config=genai.GenerationConfig(
+            max_output_tokens=max_tokens,
+            temperature=0.2,
+        )
+    )
+    return response.text
 
-    # Forensics
-    if ext in ['.pcap','.pcapng','.cap']: scores["forensics"] += 10
-    for k in ["wireshark","packet","pcap","volatility","memory dump","disk image","steganograph",
-               "hidden","metadata","exif","wav","spectrogram","png","jpeg stego"]:
-        if k in text: scores["forensics"] += 2
-
-    # Pwn
-    if ext in ['.elf'] and any(k in text for k in ["nc ","netcat","exploit","pwn"]):
-        scores["pwn"] += 5
-    for k in ["overflow","rop","heap","libc","got","plt","shellcode","canary","aslr",
-               "pie","nx","ret2","format string","pwntools","one_gadget","gadget"]:
-        if k in text: scores["pwn"] += 2
-
-    # Reverse
-    if ext in ['.elf','.exe','.dll','.so','.dylib','.pyc','.class']: scores["reverse"] += 4
-    for k in ["ghidra","radare","disasm","decompile","antidebug","ptrace","keygen",
-               "serial","license","crack","unpack","obfuscat"]:
-        if k in text: scores["reverse"] += 2
-
-    # Crypto
-    for k in ["rsa","aes","encrypt","decrypt","cipher","hash","modulus","prime","elliptic",
-               "xor","base64","caesar","vigenere","rot13","md5","sha","hmac","ecdsa","dh ",
-               "diffie","padding oracle","cbc","ecb","gcm","nonce","key","secret"]:
-        if k in text: scores["crypto"] += 2
-
-    # Web
-    for k in ["http","sql","xss","login","cookie","jwt","flask","django","node","php",
-               "mysql","postgres","injection","ssrf","ssti","lfi","rfi","serialize",
-               "upload","admin","password","token","session","cors","graphql"]:
-        if k in text: scores["web"] += 2
-
-    # Misc
-    for k in ["blockchain","solidity","ethereum","smart contract","brainfuck","ook",
-               "morse","qr code","barcode","osint","jail","sandbox","pyjail"]:
-        if k in text: scores["misc"] += 3
-
-    best = max(scores, key=scores.get)
-    return best if scores[best] > 0 else "reverse"
-
-# ── GROQ CALL AVEC RETRY ─────────────────────────────────────────────────────
-def groq_call(client, model, system, user_content, max_tokens, retries=2):
-    full_system = system + GLOBAL_SYSTEM_SUFFIX
-    for attempt in range(retries + 1):
-        try:
-            resp = client.chat.completions.create(
-                model=model,
-                max_tokens=max_tokens,
-                temperature=0.15,   # bas = plus déterministe et précis
-                messages=[
-                    {"role": "system", "content": full_system},
-                    {"role": "user",   "content": user_content}
-                ]
-            )
-            text   = resp.choices[0].message.content
-            tokens = resp.usage.prompt_tokens + resp.usage.completion_tokens
-            return text, tokens
-        except Exception as e:
-            if attempt < retries:
-                time.sleep(2 ** attempt)
-                continue
-            raise
+# ── EXTRACTION CODE PYTHON ────────────────────────────────────────────────────
+def extract_python(text):
+    """Extrait le premier bloc de code Python d'une réponse."""
+    m = re.search(r'```(?:python|py)\n([\s\S]*?)```', text)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r'```\n([\s\S]*?)```', text)
+    if m:
+        return m.group(1).strip()
+    return ""
 
 def extract_flag(text):
-    """Cherche MCTF{...} dans un texte."""
+    """Cherche un flag CTF dans le texte."""
     patterns = [
-        r'MCTF\{[^}]{1,200}\}',
-        r'mctf\{[^}]{1,200}\}',
-        r'flag["\s:=]+MCTF\{[^}]{1,200}\}',
-        r'FLAG["\s:=]+MCTF\{[^}]{1,200}\}',
+        r'[A-Za-z0-9_]+\{[A-Za-z0-9_\-!@#$%^&*()+=<>?/\\|.,;:\'"` ~]+\}',
+        r'flag\s*[:=]\s*([^\n]+)',
+        r'FLAG\s*[:=]\s*([^\n]+)',
     ]
     for p in patterns:
         m = re.search(p, text, re.IGNORECASE)
         if m:
-            flag = m.group()
-            # Normalise vers MCTF{...}
-            inner = re.search(r'\{[^}]+\}', flag)
-            if inner:
-                return "MCTF" + inner.group()
+            return m.group(0).strip()
     return None
 
-# ── ROUTES ────────────────────────────────────────────────────────────────────
+# ── ROUTE PRINCIPALE ──────────────────────────────────────────────────────────
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({"status": "ok", "version": "4.0-groq", "service": "ctf-neural"})
+    return jsonify({
+        "status": "ok", "version": "4.0",
+        "service": "ctf-neural",
+        "tools": AVAILABLE_TOOLS,
+        "engine": "gemini-2.0-flash"
+    })
 
-@app.route('/analyze', methods=['POST'])
+@app.route('/analyze', methods=['POST', 'OPTIONS'])
 def analyze():
-    api_key = request.headers.get('X-API-Key', '')
-    if not api_key or not api_key.startswith('gsk_'):
-        return jsonify({"error": "Clé API Groq manquante ou invalide (doit commencer par gsk_)"}), 401
+    if request.method == 'OPTIONS':
+        return '', 204
+
+    api_key = request.headers.get('X-API-Key', '') or request.headers.get('X-Gemini-Key', '')
+    if not api_key:
+        return jsonify({"error": "Clé API Gemini manquante"}), 401
 
     description = request.form.get('description', '').strip()
     category    = request.form.get('category', 'auto')
-    model       = request.form.get('model', 'llama-3.3-70b-versatile')
 
-    content = {
-        "name": "texte-libre", "size": len(description),
-        "ext": ".txt", "text": description,
-        "hex": "", "strings": [], "files": [], "b64": "", "entropy": 0.0
+    # Prépare le fichier
+    filepath = None
+    info = {
+        "name": "texte", "size": len(description), "ext": ".txt",
+        "text": description, "hex": "", "strings": [], "files": [],
+        "file_type": "text", "analysis": {}
     }
 
     if 'file' in request.files:
         f = request.files['file']
         if f and f.filename:
             filename = secure_filename(f.filename)
-            filepath = os.path.join(UPLOAD_FOLDER, filename)
+            filepath = os.path.join(UPLOAD_DIR, filename)
             f.save(filepath)
-            try:
-                content = extract_file_content(filepath, filename)
-                # Ajoute la description au contexte même si fichier présent
-                if description and not content.get("text","").endswith(description):
-                    content["_desc"] = description
-            finally:
-                try: os.remove(filepath)
-                except: pass
+            if os.path.getsize(filepath) > MAX_SIZE:
+                os.remove(filepath)
+                return jsonify({"error": "Fichier trop grand (max 20MB)"}), 400
+            info = static_analysis(filepath, filename)
 
-    if not content["text"] and not content["hex"] and not content["b64"] and not description:
+    if not info["text"] and not info["hex"] and not description:
         return jsonify({"error": "Aucun contenu à analyser"}), 400
 
-    category = detect_category(content, description, category)
-    ctx      = build_context(content, description)
-    system   = AGENT_PROMPTS.get(category, AGENT_PROMPTS["misc"])
+    category = detect_category(info, description, category)
+    ctx = build_context(info, description)
+    system = AGENT_PROMPTS.get(category, AGENT_PROMPTS["misc"])
 
     def generate():
-        client       = Groq(api_key=api_key)
-        total_tokens = 0
-        results      = {}
-
         def sse(event, data):
             return f"data: {json.dumps({'event': event, 'data': data}, ensure_ascii=False)}\n\n"
 
-        yield sse("start", {"file": content["name"], "category": category, "size": content["size"]})
+        yield sse("start", {"file": info["name"], "category": category, "size": info["size"]})
 
-        # ────────────────────────────────────────────────────────────────────
-        # STEP 0 — RECON + CLASSIFICATION
-        # ────────────────────────────────────────────────────────────────────
-        yield sse("step", {"step": 0, "status": "active", "label": "Reconnaissance"})
+        # ── ÉTAPE 0 : RECON ──────────────────────────────────────────────────
+        yield sse("step", {"step": 0, "status": "active"})
         try:
-            raw, toks = groq_call(client, model, system, f"""Analyse ce défi CTF de manière exhaustive.
+            recon_raw = call_gemini(api_key, f"""Analyse ce défi CTF et classifie-le.
 
-{ctx}
+{ctx[:6000]}
 
-Réponds UNIQUEMENT en JSON valide (aucun texte avant/après, aucun markdown):
+Réponds UNIQUEMENT en JSON valide:
 {{
   "category": "{category}",
   "difficulty": "easy|medium|hard|expert",
-  "file_type": "description précise",
-  "language": "langage principal",
-  "encoding_detected": "si encodage détecté: base64/hex/rot13/xor/custom/none",
-  "key_observations": [
-    "observation 1 très précise et technique",
-    "observation 2",
-    "observation 3",
-    "observation 4",
-    "observation 5"
-  ],
-  "protections": ["protection 1", "protection 2"],
-  "attack_surface": "surface d'attaque principale",
-  "vulnerability": "vulnérabilité ou faiblesse principale identifiée",
-  "main_hint": "indice le plus important pour trouver MCTF{{...}}",
-  "quick_wins": ["technique rapide 1 à essayer", "technique rapide 2"],
+  "file_type": "type précis",
+  "key_observations": ["obs 1","obs 2","obs 3","obs 4"],
+  "protections": ["protection 1"],
+  "attack_vector": "vecteur d'attaque principal",
+  "main_hint": "indice le plus important pour résoudre",
+  "tools_needed": ["outil1","outil2"],
   "confidence": 90
-}}""", max_tokens=900)
-            total_tokens += toks
+}}""", system=system, max_tokens=1000)
+
             try:
-                results["recon"] = json.loads(re.search(r'\{[\s\S]*\}', raw).group())
+                recon = json.loads(re.search(r'\{[\s\S]*\}', recon_raw).group())
             except:
-                results["recon"] = {
-                    "category": category, "difficulty": "medium",
-                    "key_observations": [], "protections": [],
-                    "attack_surface": "analyse en cours",
-                    "vulnerability": "inconnue",
-                    "quick_wins": [], "confidence": 50
-                }
-            yield sse("step", {"step": 0, "status": "done", "data": results["recon"]})
-            r = results["recon"]
-            yield sse("log", {"type": "ok",   "msg": f"[+] {r.get('category','?').upper()} · {r.get('difficulty','?')} · confiance {r.get('confidence','?')}%"})
-            yield sse("log", {"type": "info", "msg": f"[*] Type: {r.get('file_type','?')} | Encodage: {r.get('encoding_detected','?')}"})
-            if r.get("vulnerability"):
-                yield sse("log", {"type": "warn", "msg": f"[!] Vulnérabilité: {r['vulnerability']}"})
-            for obs in r.get("key_observations", []):
+                recon = {"category": category, "key_observations": [], "protections": [], "confidence": 60}
+
+            yield sse("step", {"step": 0, "status": "done", "data": recon})
+            yield sse("log", {"type": "ok",   "msg": f"[+] {category.upper()} · {recon.get('difficulty','?')} · {recon.get('confidence','?')}%"})
+            for obs in recon.get("key_observations", []):
                 yield sse("log", {"type": "dim", "msg": f"    ▸ {obs}"})
-            if r.get("protections"):
-                yield sse("log", {"type": "warn", "msg": f"[!] Protections: {', '.join(r['protections'])}"})
-            for qw in r.get("quick_wins", []):
-                yield sse("log", {"type": "info", "msg": f"[⚡] Quick win: {qw}"})
-            if r.get("main_hint"):
-                yield sse("log", {"type": "info", "msg": f"[★] Indice clé: {r['main_hint']}"})
+            if recon.get("protections"):
+                yield sse("log", {"type": "warn", "msg": f"[!] Protections: {', '.join(recon['protections'])}"})
+            if recon.get("main_hint"):
+                yield sse("log", {"type": "info", "msg": f"[*] Indice clé: {recon['main_hint']}"})
         except Exception as e:
             yield sse("step", {"step": 0, "status": "error"})
-            yield sse("error", {"msg": f"Étape Recon: {str(e)}"})
+            yield sse("error", {"msg": f"Recon: {e}"})
             return
 
-        # ────────────────────────────────────────────────────────────────────
-        # STEP 1 — ANALYSE PROFONDE + DÉCODAGE DIRECT
-        # ────────────────────────────────────────────────────────────────────
-        yield sse("step", {"step": 1, "status": "active", "label": "Analyse approfondie"})
+        # ── ÉTAPE 1 : ANALYSE APPROFONDIE ────────────────────────────────────
+        yield sse("step", {"step": 1, "status": "active"})
         try:
-            recon_ctx = f"""Catégorie: {results['recon'].get('category')}
-Difficulté: {results['recon'].get('difficulty')}
-Vulnérabilité identifiée: {results['recon'].get('vulnerability')}
-Surface d'attaque: {results['recon'].get('attack_surface')}
-Observations: {json.dumps(results['recon'].get('key_observations', []))}
-Quick wins: {json.dumps(results['recon'].get('quick_wins', []))}"""
+            analysis = call_gemini(api_key, f"""Analyse technique approfondie de ce défi CTF.
 
-            raw, toks = groq_call(client, model, system, f"""Analyse technique approfondie + tentative de résolution directe.
+{ctx[:10000]}
 
-{ctx}
+Recon: {json.dumps(recon, ensure_ascii=False)}
 
-CONTEXTE RECON:
-{recon_ctx}
+Analyse en détail:
+1. Vulnérabilités et faiblesses précises (avec localisation dans le code)
+2. Algorithmes, encodages, structures de données clés
+3. Flux d'exécution et logique de vérification du flag
+4. Points d'entrée pour l'attaque
+5. Indices cachés (valeurs magiques, constantes, noms de fonctions)
+6. Commandes et outils exacts à utiliser
 
-MISSION: Analyse ET résous si possible maintenant.
-
-1. DÉCODAGE IMMÉDIAT: Si tu vois du base64/hex/rot/xor/encodage → décode-le maintenant et cherche MCTF{{...}}
-2. ANALYSE DÉTAILLÉE:
-   - Vulnérabilités précises avec localisation (ligne, fonction, offset)
-   - Algorithme de vérification/génération du flag
-   - Flux d'exécution complet
-   - Valeurs magiques, constantes, clés hardcodées
-3. ATTAQUE DIRECTE: Si le flag est visible/calculable maintenant → donne-le
-4. POINTS D'ENTRÉE: Liste ordonnée par probabilité de succès
-5. PIÈGES: Anti-debug, fausses pistes, honeypots
-
-Si tu trouves MCTF{{...}} → écris "FLAG_FOUND: MCTF{{valeur}}" en majuscules.""", max_tokens=3000)
-            total_tokens += toks
-            results["analysis"] = raw
-
-            # Cherche flag dans l'analyse
-            flag_direct = extract_flag(raw)
-            if flag_direct:
-                yield sse("log", {"type": "flag", "msg": f"[★★★] FLAG TROUVÉ EN ANALYSE: {flag_direct}"})
-                results["early_flag"] = flag_direct
+Sois très précis et technique. Cite des éléments spécifiques du code/binaire.""",
+                system=system, max_tokens=3000)
 
             yield sse("step", {"step": 1, "status": "done"})
             yield sse("log", {"type": "ok", "msg": "[+] Analyse technique complète"})
-            for line in raw.split('\n')[:6]:
-                if line.strip() and not line.startswith('#') and len(line.strip()) > 10:
-                    yield sse("log", {"type": "dim", "msg": f"    {line.strip()[:140]}"})
+            for line in analysis.split('\n')[:4]:
+                if line.strip():
+                    yield sse("log", {"type": "dim", "msg": f"    {line.strip()[:120]}"})
         except Exception as e:
             yield sse("step", {"step": 1, "status": "error"})
-            yield sse("error", {"msg": f"Étape Analyse: {str(e)}"})
+            yield sse("error", {"msg": f"Analyse: {e}"})
             return
 
-        # ────────────────────────────────────────────────────────────────────
-        # STEP 2 — STRATÉGIE D'ATTAQUE CIBLÉE
-        # ────────────────────────────────────────────────────────────────────
-        yield sse("step", {"step": 2, "status": "active", "label": "Stratégie d'attaque"})
+        # ── ÉTAPE 2 : GÉNÉRATION SCRIPT ──────────────────────────────────────
+        yield sse("step", {"step": 2, "status": "active"})
         try:
-            raw, toks = groq_call(client, model, system, f"""Stratégie de résolution COMPLÈTE pour ce défi CTF.
+            exploit_raw = call_gemini(api_key, f"""Génère le script Python COMPLET et FONCTIONNEL pour résoudre ce défi CTF.
 
-DÉFI (résumé):
-{ctx[:4000]}
+Défi: {ctx[:8000]}
+Analyse: {analysis[:2000]}
 
-ANALYSE:
-{results['analysis'][:2000]}
+RÈGLES IMPÉRATIVES:
+1. Script Python 3 complet avec tous les imports
+2. Si le flag peut être calculé STATIQUEMENT: calcule-le et affiche print("FLAG:", flag)
+3. Utilise pwntools si connexion réseau nécessaire (HOST="localhost", PORT=1337)
+4. Utilise pycryptodome pour crypto (from Crypto.Cipher import AES, etc.)
+5. Ajoute des print() pour montrer la progression
+6. Le script doit être directement exécutable: python3 solution.py
+7. Si ZIP: les fichiers sont déjà extraits dans le dossier courant
 
-Produis:
-
-## ÉTAPES DE RÉSOLUTION (ordonnées, concrètes)
-Étape 1: [action + commande exacte]
-Étape 2: ...
-
-## COMMANDES IMMÉDIATES
-```bash
-# À copier-coller directement
-strings fichier | grep MCTF
-binwalk -e fichier
-file fichier
-xxd fichier | head -50
-```
-
-## ATTAQUE PRINCIPALE
-Décris précisément comment obtenir MCTF{{...}}:
-- Quel algorithme inverser / quelle clé utiliser / quel payload injecter
-- Output attendu à chaque étape
-- Où apparaît le flag
-
-## PLAN B (si l'attaque principale échoue)
-Alternative technique complète.""", max_tokens=2000)
-            total_tokens += toks
-            results["strategy"] = raw
-            yield sse("step", {"step": 2, "status": "done"})
-            yield sse("log", {"type": "ok", "msg": "[+] Stratégie d'attaque définie"})
-        except Exception as e:
-            yield sse("step", {"step": 2, "status": "error"})
-            yield sse("error", {"msg": f"Étape Stratégie: {str(e)}"})
-            return
-
-        # ────────────────────────────────────────────────────────────────────
-        # STEP 3 — SCRIPT DE RÉSOLUTION COMPLET
-        # ────────────────────────────────────────────────────────────────────
-        yield sse("step", {"step": 3, "status": "active", "label": "Génération exploit"})
-        try:
-            raw, toks = groq_call(client, model, system, f"""Génère le script Python COMPLET qui résout ce défi CTF et affiche MCTF{{...}}.
-
-DÉFI:
-{ctx[:5000]}
-
-ANALYSE:
-{results['analysis'][:1500]}
-
-STRATÉGIE:
-{results['strategy'][:1500]}
-
-EXIGENCES ABSOLUES:
-1. Script Python 3 complet, exécutable tel quel
-2. Tous les imports en tête
-3. Si flag statique → le calcule et affiche `print("FLAG:", flag)`
-4. Si réseau requis → pwntools/requests complet avec HOST/PORT configurables
-5. Gère TOUS les cas: décodage, crypto, exploitation, extraction
-6. Cherche et affiche MCTF{{...}} explicitement
-7. Commente chaque section importante
-8. Ajoute une section "# APPROCHE ALTERNATIVE" si la principale peut échouer
-
+Format:
 ```python
 #!/usr/bin/env python3
-# CTF·NEURAL Solution — {content['name']}
-# Catégorie: {category}
-# Flag format: MCTF{{...}}
-
-# === IMPORTS ===
-[tous les imports]
-
-# === CONFIGURATION ===
-HOST = "localhost"  # modifier si remote
-PORT = 1337         # modifier si remote
-
-# === SOLUTION PRINCIPALE ===
-def solve():
-    [code complet]
-    print("FLAG:", flag)
-
-# === APPROCHE ALTERNATIVE ===
-def solve_alt():
-    [plan B]
-
+# Solution - {info['name']}
+[imports]
+[code complet]
 if __name__ == "__main__":
-    solve()
-```""", max_tokens=4000)
-            total_tokens += toks
-            results["exploit"] = raw
+    main()
+```""", system=system, max_tokens=4000)
 
-            # Cherche flag dans le script
-            flag_in_script = extract_flag(raw)
-            if flag_in_script:
-                yield sse("log", {"type": "flag", "msg": f"[★★★] FLAG DANS LE SCRIPT: {flag_in_script}"})
-                results["script_flag"] = flag_in_script
-
-            yield sse("step", {"step": 3, "status": "done"})
+            script = extract_python(exploit_raw) or exploit_raw[:3000]
+            yield sse("step", {"step": 2, "status": "done"})
             yield sse("log", {"type": "ok", "msg": "[+] Script de résolution généré"})
+
+            # Check flag statique dans le script
+            static_flag = extract_flag(exploit_raw)
+            if static_flag:
+                yield sse("log", {"type": "flag", "msg": f"[★] Flag dans le script: {static_flag}"})
         except Exception as e:
-            yield sse("step", {"step": 3, "status": "error"})
-            yield sse("error", {"msg": f"Étape Exploit: {str(e)}"})
+            yield sse("step", {"step": 2, "status": "error"})
+            yield sse("error", {"msg": f"Script: {e}"})
             return
 
-        # ────────────────────────────────────────────────────────────────────
-        # STEP 4 — EXTRACTION FLAG + SYNTHÈSE
-        # ────────────────────────────────────────────────────────────────────
-        yield sse("step", {"step": 4, "status": "active", "label": "Extraction flag"})
+        # ── ÉTAPE 3 : EXÉCUTION RÉELLE ───────────────────────────────────────
+        yield sse("step", {"step": 3, "status": "active"})
+        exec_output = ""
+        exec_flag = None
+
+        if script:
+            yield sse("log", {"type": "info", "msg": "[*] Exécution du script en sandbox..."})
+            # Copier le fichier original dans le sandbox si besoin
+            if filepath:
+                import shutil
+                dst = os.path.join(SANDBOX_DIR, info["name"])
+                if not os.path.exists(dst):
+                    shutil.copy2(filepath, dst)
+
+            result = run_python(script, timeout=25, cwd=SANDBOX_DIR)
+            exec_output = result["stdout"] + result["stderr"]
+
+            yield sse("log", {"type": "info" if result["ok"] else "warn",
+                              "msg": f"[*] Exit code: {result['returncode']}"})
+
+            for line in exec_output.split('\n')[:20]:
+                if line.strip():
+                    yield sse("log", {"type": "ok" if "flag" in line.lower() or "{" in line else "dim",
+                                      "msg": f"    {line[:150]}"})
+
+            # Cherche le flag dans l'output
+            exec_flag = extract_flag(exec_output)
+            if exec_flag:
+                yield sse("log", {"type": "flag", "msg": f"[★] FLAG EXTRAIT: {exec_flag}"})
+                yield sse("step", {"step": 3, "status": "done"})
+            elif result["returncode"] != 0 and result["stderr"]:
+                # Le script a planté → on demande à l'IA de corriger
+                yield sse("log", {"type": "warn", "msg": "[!] Erreur d'exécution, correction IA..."})
+                try:
+                    fixed_raw = call_gemini(api_key, f"""Ce script Python a produit une erreur. Corrige-le.
+
+Script original:
+```python
+{script[:3000]}
+```
+
+Erreur obtenue:
+```
+{result['stderr'][:1000]}
+```
+
+Output partiel:
+```
+{result['stdout'][:500]}
+```
+
+Contexte du défi:
+{ctx[:3000]}
+
+Génère le script CORRIGÉ complet. Si tu ne peux pas corriger (ex: besoin d'un serveur live),
+explique exactement ce qu'il faut faire et génère quand même le meilleur script possible.""",
+                        system=system, max_tokens=3000)
+
+                    fixed_script = extract_python(fixed_raw) or fixed_raw[:2000]
+                    if fixed_script and fixed_script != script:
+                        yield sse("log", {"type": "info", "msg": "[*] Re-exécution du script corrigé..."})
+                        result2 = run_python(fixed_script, timeout=25, cwd=SANDBOX_DIR)
+                        exec_output += "\n--- SCRIPT CORRIGÉ ---\n" + result2["stdout"] + result2["stderr"]
+                        exec_flag = extract_flag(exec_output)
+                        if exec_flag:
+                            yield sse("log", {"type": "flag", "msg": f"[★] FLAG: {exec_flag}"})
+                        script = fixed_script
+                        for line in result2["stdout"].split('\n')[:10]:
+                            if line.strip():
+                                yield sse("log", {"type": "dim", "msg": f"    {line[:150]}"})
+                except Exception as e2:
+                    yield sse("log", {"type": "warn", "msg": f"[!] Correction IA: {e2}"})
+                yield sse("step", {"step": 3, "status": "done"})
+            else:
+                yield sse("step", {"step": 3, "status": "done"})
+        else:
+            yield sse("step", {"step": 3, "status": "done"})
+            yield sse("log", {"type": "warn", "msg": "[!] Pas de script exécutable généré"})
+
+        # ── ÉTAPE 4 : SYNTHÈSE FINALE ─────────────────────────────────────────
+        yield sse("step", {"step": 4, "status": "active"})
         try:
-            # Priorité: flag trouvé dans les étapes précédentes
-            early_flag = results.get("early_flag") or results.get("script_flag")
+            # Si on a déjà le flag, on demande juste le writeup
+            if exec_flag:
+                flag_context = f"FLAG TROUVÉ PAR EXÉCUTION: {exec_flag}"
+            else:
+                flag_context = f"Output d'exécution:\n{exec_output[:1000]}\n\nAnalyse:\n{analysis[:500]}"
 
-            all_results = f"""ANALYSE: {results['analysis'][:1000]}
-SCRIPT: {results['exploit'][:2000]}
-STRATÉGIE: {results['strategy'][:500]}"""
+            final_raw = call_gemini(api_key, f"""Synthèse finale de ce défi CTF.
 
-            raw, toks = groq_call(client, model, system, f"""Synthèse finale. TROUVE et DONNE le flag MCTF{{...}}.
+{flag_context}
 
-{all_results}
-
-DÉFI ORIGINAL:
-{ctx[:2000]}
-
-INSTRUCTIONS:
-- Si le flag MCTF{{...}} est visible dans l'analyse ou le script → donne-le dans "flag"
-- Si tu peux le calculer mentalement → fais-le et donne-le
-- Format OBLIGATOIRE: MCTF{{contenu}} (avec accolades)
-- Sois certain à 100% avant de le mettre, sinon mets null
+Script utilisé:
+{script[:1000]}
 
 Réponds UNIQUEMENT en JSON valide:
 {{
   "flag_found": true,
-  "flag": "MCTF{{valeur_exacte_ou_null}}",
-  "flag_format": "MCTF{{...}}",
+  "flag": "valeur_du_flag_ou_null",
+  "flag_format": "format ex: CTF{{...}}",
   "confidence": 95,
   "requires_runtime": false,
-  "solve_method": "méthode exacte utilisée pour trouver le flag",
-  "writeup": "Résumé technique complet: vulnérabilité exploitée, méthode d'attaque, comment le flag a été obtenu.",
-  "next_steps": "Si non trouvé: commandes exactes à exécuter pour obtenir le flag"
-}}""", max_tokens=800)
-            total_tokens += toks
+  "writeup": "Résumé clair en 2-3 phrases: vulnérabilité, méthode, résultat.",
+  "next_steps": "Si flag non trouvé: instructions précises"
+}}""", system=system, max_tokens=800)
 
             try:
-                flag_data = json.loads(re.search(r'\{[\s\S]*\}', raw).group())
+                flag_data = json.loads(re.search(r'\{[\s\S]*\}', final_raw).group())
             except:
                 flag_data = {
-                    "flag_found": False, "flag": None, "confidence": 0,
-                    "flag_format": "MCTF{...}", "requires_runtime": True,
-                    "solve_method": "voir script généré",
-                    "writeup": "Analyse complète effectuée. Voir le script généré.",
-                    "next_steps": "Exécute le script Python généré."
+                    "flag_found": bool(exec_flag),
+                    "flag": exec_flag,
+                    "flag_format": "CTF{...}",
+                    "confidence": 80 if exec_flag else 30,
+                    "requires_runtime": not exec_flag,
+                    "writeup": "Analyse complète. Voir le script généré.",
+                    "next_steps": "Exécute le script localement avec les bons paramètres."
                 }
 
-            # Override si flag trouvé plus tôt
-            if early_flag and not flag_data.get("flag"):
-                flag_data["flag"] = early_flag
+            # Priorité au flag extrait par exécution réelle
+            if exec_flag and not flag_data.get("flag"):
+                flag_data["flag"] = exec_flag
                 flag_data["flag_found"] = True
-                flag_data["confidence"] = 99
 
-            # Validation format MCTF
+            yield sse("step", {"step": 4, "status": "done"})
             if flag_data.get("flag"):
-                f_val = flag_data["flag"]
-                if not re.match(r'^MCTF\{.+\}$', f_val):
-                    # Tente extraction
-                    extracted = extract_flag(f_val)
-                    if extracted:
-                        flag_data["flag"] = extracted
-                    else:
-                        flag_data["flag"] = None
-                        flag_data["flag_found"] = False
-
-            results["flag_data"] = flag_data
+                yield sse("log", {"type": "flag", "msg": f"[★] FLAG FINAL: {flag_data['flag']}"})
+            else:
+                yield sse("log", {"type": "warn", "msg": f"[!] Format attendu: {flag_data.get('flag_format','CTF{{...}}')}"})
+                if flag_data.get("next_steps"):
+                    yield sse("log", {"type": "info", "msg": f"[→] {flag_data['next_steps']}"})
+        except Exception as e:
+            flag_data = {
+                "flag_found": bool(exec_flag), "flag": exec_flag,
+                "flag_format": "CTF{...}", "confidence": 50,
+                "requires_runtime": True, "writeup": str(e),
+                "next_steps": "Exécute le script localement."
+            }
             yield sse("step", {"step": 4, "status": "done"})
 
-            fd = results["flag_data"]
-            if fd.get("flag"):
-                yield sse("log", {"type": "flag", "msg": f"[★★★] FLAG: {fd['flag']}"})
-                yield sse("log", {"type": "ok",   "msg": f"[+] Méthode: {fd.get('solve_method','?')}"})
-                yield sse("log", {"type": "ok",   "msg": f"[+] Confiance: {fd.get('confidence','?')}%"})
-            else:
-                yield sse("log", {"type": "warn", "msg": f"[!] Flag nécessite exécution dynamique. Format: MCTF{{...}}"})
-                if fd.get("next_steps"):
-                    yield sse("log", {"type": "info", "msg": f"[→] {fd['next_steps']}"})
-        except Exception as e:
-            yield sse("step", {"step": 4, "status": "error"})
-            yield sse("error", {"msg": f"Étape Flag: {str(e)}"})
-            return
-
-        # ── DONE ─────────────────────────────────────────────────────────────
+        # ── DONE ────────────────────────────────────────────────────────────
         yield sse("done", {
-            "recon":    results.get("recon", {}),
-            "analysis": results.get("analysis", ""),
-            "strategy": results.get("strategy", ""),
-            "exploit":  results.get("exploit", ""),
-            "flag":     results.get("flag_data", {}),
-            "tokens":   total_tokens,
+            "recon":       recon,
+            "analysis":    analysis,
+            "strategy":    "",
+            "exploit":     f"```python\n{script}\n```" if script else exploit_raw,
+            "exec_output": exec_output,
+            "flag":        flag_data,
+            "tokens":      0,
         })
+
+        # Nettoyage
+        if filepath:
+            try: os.remove(filepath)
+            except: pass
 
     return Response(
         stream_with_context(generate()),
         mimetype='text/event-stream',
         headers={
-            'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no',
+            'Cache-Control':       'no-cache',
+            'X-Accel-Buffering':   'no',
             'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'X-API-Key, Content-Type',
         }
     )
-
-@app.route('/analyze', methods=['OPTIONS'])
-def analyze_options():
-    return '', 204, {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'X-API-Key, Content-Type',
-    }
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
