@@ -675,7 +675,7 @@ function showResult(data){
   } else {
     h+=`<div class="nofl">`;
     h+=`<div style="font-size:10px;color:var(--a);font-weight:600;margin-bottom:5px">⚠ Flag non extrait statiquement</div>`;
-    if(fr.flag_format) h+=`<div style="font-size:10px;color:var(--mu)">Format attendu: <span style="color:var(--tx)">${esc(fr.flag_format)}</span></div>`;
+    if(fr.flag_format) h+=`<div style="font-size:10px;color:var(--mu)">Format attendu: <span style="color:var(--tx)">${esc(fr.flag_format||'MCTF{...}')}</span></div>`;
     if(fr.requires_runtime) h+=`<div style="font-size:10px;color:var(--mu);margin-top:4px">Requiert une exécution dynamique (serveur live ou binaire local).</div>`;
     if(fr.next_steps) h+=`<div style="font-size:10px;color:var(--c);margin-top:5px">→ ${esc(fr.next_steps)}</div>`;
     h+=`</div>`;
