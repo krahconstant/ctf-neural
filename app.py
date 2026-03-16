@@ -206,8 +206,8 @@ def detect_category(info, description, hint):
 # ── GEMINI API ────────────────────────────────────────────────────────────────
 GROQ_MODELS = [
     "llama-3.3-70b-versatile",
-    "llama3-70b-8192",
-    "mixtral-8x7b-32768",
+    "llama-3.1-70b-versatile",
+    "llama3-groq-70b-8192-tool-use-preview",
 ]
 
 def call_groq(api_key, prompt, system="", max_tokens=8192):
