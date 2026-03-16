@@ -319,7 +319,7 @@ Le script doit être directement exécutable sans modification (sauf HOST/PORT s
             results["exploit"] = raw
             yield sse("step", {"step": 3, "status": "done"})
             yield sse("log", {"type": "ok", "msg": "[+] Script de résolution généré"})
-            flag_in_code = re.search(r'FLAG[:\s]+([A-Za-z0-9_\-]+\{[^}]{3,80}\})', results["exploit"])
+            flag_in_code = re.search(r'(?:FLAG|MCTF)[:\s]+([A-Za-z0-9_\-]*\{[^}]{3,80}\})', results["exploit"])
             if flag_in_code:
                 yield sse("log", {"type": "flag", "msg": f"[★] Flag détecté dans le code: {flag_in_code.group(1)}"})
         except Exception as e:
@@ -339,7 +339,7 @@ Réponds UNIQUEMENT en JSON valide:
 {{
   "flag_found": true,
   "flag": "valeur_complete_du_flag_ou_null",
-  "flag_format": "format attendu ex: CTF{{...}} ou MCTF{{...}}",
+  "flag_format": "MCTF{{...}}",
   "confidence": 85,
   "requires_runtime": false,
   "writeup": "Résumé de la solution en 2-3 phrases: vulnérabilité exploitée, méthode, résultat.",
@@ -354,7 +354,7 @@ Sinon mets null et explique dans 'next_steps'.""", max_tokens=700)
             except:
                 results["flag_data"] = {
                     "flag_found": False, "flag": None, "confidence": 0,
-                    "flag_format": "CTF{...}", "requires_runtime": True,
+                    "flag_format": "MCTF{...}", "requires_runtime": True,
                     "writeup": "Analyse complète. Voir le script généré.",
                     "next_steps": "Exécute le script Python généré avec les bons paramètres."
                 }
@@ -363,7 +363,7 @@ Sinon mets null et explique dans 'next_steps'.""", max_tokens=700)
             if fd.get("flag"):
                 yield sse("log", {"type": "flag", "msg": f"[★] FLAG: {fd['flag']}"})
             else:
-                yield sse("log", {"type": "warn", "msg": f"[!] Flag non extrait statiquement. Format: {fd.get('flag_format','CTF{{...}}')}"})
+                yield sse("log", {"type": "warn", "msg": f"[!] Flag non extrait statiquement. Format: {fd.get('flag_format','MCTF{{...}}')}"})
                 if fd.get("next_steps"):
                     yield sse("log", {"type": "info", "msg": f"[*] {fd['next_steps']}"})
         except Exception as e:
