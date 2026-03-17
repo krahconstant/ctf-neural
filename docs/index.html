@@ -108,7 +108,7 @@ select option{background:var(--bg3)}textarea{resize:vertical;min-height:70px}
 <div class="sb">
   <div class="sb-logo">
     <div class="logo">AI</div>
-    <div><div class="tn" style="font-size:11px">CTF·NEURAL</div><div class="tv">v4.1 · Groq</div></div>
+    <div><div class="tn" style="font-size:11px">CTF·NEURAL</div><div class="tv">v5.0 · Groq</div></div>
   </div>
   <div class="sb-sec">
     <div class="sb-lbl">Plateforme</div>
@@ -410,7 +410,7 @@ async function doSolve(){
   fd.append('description',document.getElementById('desc').value);
   fd.append('category',document.getElementById('cat').value);
 
-  tlog('prompt','▸ CTF·NEURAL v4.1 · Groq + Sandbox');
+  tlog('prompt','▸ CTF·NEURAL v5.0 · Groq + Sandbox');
   tlog('info',`[*] ${S.fname||'texte'} · cat=${document.getElementById('cat').value}`);
   tlog('info','[*] Analyse IA + exécution réelle activées');
 
@@ -498,14 +498,22 @@ function showResult(data){
   document.getElementById('rtime').textContent=`${elapsed}s · Groq · Llama 3.3 70B`;
   const fr=data.flag||{};
   let h='';
-  if(fr.flag){
-    h+=`<div class="flagbox"><div class="fl">🏆 Flag trouvé par exécution réelle !</div><div class="fv2">${esc(fr.flag)}</div><button class="fcpy" onclick="cpy('${esc(fr.flag)}',this)">📋 Copier</button></div>`;
+  // FLAG : affiché SEULEMENT si trouvé par exécution réelle
+  if(fr.flag && fr.flag !== 'null' && fr.flag !== null && !fr.flag.includes('{...}')){
+    h+=`<div class="flagbox">
+      <div class="fl">🏆 Flag trouvé par exécution réelle</div>
+      <div class="fv2">${esc(fr.flag)}</div>
+      <button class="fcpy" onclick="cpy('${esc(fr.flag)}',this)">📋 Copier le flag</button>
+    </div>`;
   }else{
-    h+=`<div class="nofl"><div style="font-size:10px;color:var(--a);font-weight:600;margin-bottom:5px">⚠ Flag non extrait automatiquement</div>`;
-    if(fr.flag_format) h+=`<div style="font-size:10px;color:var(--mu)">Format: <span style="color:var(--tx)">${esc(fr.flag_format)}</span></div>`;
-    if(fr.requires_runtime) h+=`<div style="font-size:10px;color:var(--c);margin-top:4px">→ Requiert un serveur live (nc/tcp). Lance le script localement.</div>`;
-    if(fr.next_steps) h+=`<div style="font-size:10px;color:var(--mu);margin-top:5px">${esc(fr.next_steps)}</div>`;
-    h+=`</div>`;
+    const isRemote = fr.requires_runtime;
+    h+=`<div class="nofl">
+      <div style="font-size:11px;color:var(--a);font-weight:600;margin-bottom:8px">
+        ${isRemote ? '🌐 Service distant requis' : '⚠ Flag non extrait automatiquement'}
+      </div>
+      ${fr.flag_format ? `<div style="font-size:10px;color:var(--mu);margin-bottom:5px">Format attendu: <span style="color:var(--tx)">${esc(fr.flag_format)}</span></div>` : ''}
+      ${fr.next_steps ? `<div style="font-size:11px;color:var(--c);background:rgba(0,212,255,.05);border:1px solid rgba(0,212,255,.15);border-radius:6px;padding:8px;margin-top:6px">${esc(fr.next_steps)}</div>` : ''}
+    </div>`;
   }
   if(fr.writeup) h+=`<div style="margin-bottom:12px"><div class="slbl">Writeup</div><div style="font-size:11px;color:var(--tx);line-height:1.7;background:var(--bg3);border:1px solid var(--bord);border-radius:7px;padding:11px">${esc(fr.writeup)}</div></div>`;
 
