@@ -85,29 +85,56 @@ def llm(api_key, prompt, system="", max_tokens=4096):
     raise Exception(f"Aucun modèle disponible. ({last_err})")
 
 def run(cmd, timeout=25, cwd=None, stdin=None, env_extra=None):
-    env = {**os.environ, "PATH": "/usr/bin:/bin:/usr/local/bin"}
-    if env_extra: env.update(env_extra)
+    """Lance une commande système avec PATH étendu et capture complète."""
+    env = {
+        **os.environ,
+        "PATH": (
+            "/usr/bin:/bin:/usr/local/bin:/usr/sbin:/sbin"
+            ":/usr/games:/usr/local/games:/snap/bin:/opt/local/bin"
+            ":/root/.local/bin:/home/user/.local/bin"
+        ),
+        "TERM": "xterm",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    if env_extra:
+        env.update(env_extra)
     try:
-        r = subprocess.run(cmd, shell=isinstance(cmd, str), capture_output=True, text=True,
-                           timeout=timeout, cwd=cwd or SANDBOX_DIR, input=stdin, env=env)
-        return {"out": r.stdout[:15000], "err": r.stderr[:5000], "code": r.returncode}
+        r = subprocess.run(
+            cmd, shell=isinstance(cmd, str), capture_output=True, text=True,
+            timeout=timeout, cwd=cwd or SANDBOX_DIR, input=stdin, env=env
+        )
+        return {"out": r.stdout[:20000], "err": r.stderr[:6000], "code": r.returncode}
     except subprocess.TimeoutExpired:
         return {"out": "", "err": f"Timeout {timeout}s", "code": -1}
     except Exception as e:
         return {"out": "", "err": str(e), "code": -1}
 
+def tool_available(name):
+    """Vérifie si un outil système est disponible."""
+    return bool(shutil.which(name))
+
 def run_py(code, timeout=45, cwd=None):
+    """Exécute un script Python avec capture d'erreurs améliorée et cwd correct."""
+    work_dir = cwd or SANDBOX_DIR
     tmp = os.path.join(SANDBOX_DIR, f"sol_{int(time.time()*1000)}.py")
+    # On injecte le code directement sans wrapper (le wrapper peut casser l'indentation)
     try:
-        with open(tmp, "w") as f: f.write(code)
-        return run(["python3", "-u", tmp], timeout=timeout, cwd=cwd or SANDBOX_DIR)
+        with open(tmp, "w") as f:
+            f.write(code)
+        return run(["python3", "-u", tmp], timeout=timeout, cwd=work_dir)
     finally:
         try: os.remove(tmp)
         except: pass
 
 def pip_install(packages):
+    """Installe des paquets pip à la volée avec --break-system-packages."""
     if not packages: return
-    run(f"pip install --quiet {' '.join(packages)}", timeout=60)
+    safe = [p for p in packages if re.match(r"^[a-zA-Z0-9_\-\.\[\]]+$", p)]
+    if safe:
+        run(
+            f"pip install --quiet --break-system-packages {' '.join(safe)}",
+            timeout=90
+        )
 
 def extract_code(text):
     m = re.search(r'```python\n([\s\S]*?)```', text)
@@ -394,36 +421,174 @@ def _handle_pdf(filepath, filename, info):
     r = run(["binwalk", filepath], timeout=15); info["extra"]["binwalk"] = r["out"][:2000]
     r = run(["strings", "-n", "5", filepath]); info["strings"] = [s for s in r["out"].split("\n") if s.strip()][:200]
 
+# Mots-clés par catégorie avec pondération (plus de points = plus probable)
+CAT_KEYWORDS = {
+    "pwn": {
+        "overflow": 4, "buffer overflow": 5, "stack overflow": 5,
+        "rop": 5, "ret2libc": 5, "ret2win": 5, "one_gadget": 4,
+        "heap": 3, "tcache": 5, "fastbin": 5, "unsorted bin": 5,
+        "use after free": 5, "uaf": 5, "double free": 5,
+        "format string": 5, "printf(": 3, "%p %p": 4, "%n": 4,
+        "got": 3, "plt": 3, "libc": 3, "shellcode": 4,
+        "pwntools": 5, "remote(": 4, "process(": 3,
+        "pie": 2, "aslr": 2, "canary": 3, "nx": 2,
+        "off by one": 5, "off-by-one": 5, "fsop": 5,
+    },
+    "reverse": {
+        "reversing": 4, "reverse engineering": 5, "decompile": 4,
+        "disassemble": 4, "disassembly": 4, "ghidra": 4, "ida": 4,
+        "angr": 3, "radare2": 3, "r2": 2,
+        "vm": 2, "virtual machine": 3, "bytecode": 3,
+        "obfuscation": 4, "anti-debug": 4, "anti-disassembly": 4,
+        "crackme": 5, "keygen": 4, "license": 2,
+        "strcmp": 3, "strncmp": 3, "check_flag": 4, "verify": 2,
+        "xor encrypt": 3, "custom cipher": 3,
+    },
+    "web": {
+        "http": 2, "https": 2, "url": 2, "endpoint": 3,
+        "sql injection": 5, "sqli": 5, "union select": 5,
+        "xss": 5, "cross site": 4, "script injection": 4,
+        "ssti": 5, "server side template": 5, "jinja2": 4, "twig": 4,
+        "lfi": 5, "local file inclusion": 5, "path traversal": 4,
+        "ssrf": 5, "server side request": 5,
+        "xxe": 5, "xml injection": 4,
+        "idor": 5, "insecure direct": 4,
+        "jwt": 4, "json web token": 4, "bearer": 3,
+        "cookie": 3, "session": 2, "csrf": 4,
+        "deserialization": 4, "pickle": 4, "unserialize": 4,
+        "graphql": 4, "mutation": 3, "query": 2,
+        "flask": 3, "django": 3, "express": 2, "php": 3,
+        "login": 2, "admin": 2, "password": 2,
+        "request": 2, "response": 2, "curl": 2,
+        "race condition": 4, "oauth": 4, "cors": 3,
+    },
+    "crypto": {
+        "rsa": 5, "modulus": 4, "public key": 4, "private key": 4,
+        "aes": 5, "des": 4, "3des": 4, "rc4": 4,
+        "xor": 3, "xor key": 4,
+        "caesar": 4, "vigenere": 4, "rot13": 3, "rot": 2,
+        "elliptic curve": 5, "ecc": 5, "ecdsa": 5, "ecdh": 5,
+        "hash": 3, "sha": 3, "md5": 3, "sha256": 4,
+        "hmac": 4, "pbkdf": 4, "bcrypt": 3,
+        "padding oracle": 5, "cbc": 4, "ecb": 4, "gcm": 4,
+        "encrypt": 3, "decrypt": 3, "cipher": 4,
+        "prime": 3, "factor": 3, "wiener": 4, "fermat": 4,
+        "lattice": 5, "lwe": 5, "ntru": 5, "lll": 4,
+        "base64": 2, "hex encode": 2,
+    },
+    "forensics": {
+        "steg": 4, "steganography": 5, "steghide": 5,
+        "lsb": 5, "least significant bit": 5,
+        "binwalk": 4, "foremost": 4, "carving": 4,
+        "exiftool": 3, "exif": 3, "metadata": 3,
+        "pcap": 5, "wireshark": 4, "tshark": 4, "network capture": 5,
+        "memory dump": 5, "volatility": 5, "memdump": 5,
+        "zsteg": 4, "outguess": 4, "stegsolve": 4,
+        "morse": 4, "dtmf": 4, "spectogram": 4, "spectrogram": 5,
+        "hidden data": 4, "embedded": 3,
+        "wav": 2, "audio": 2, "image forensics": 5,
+        "disk image": 4, "autopsy": 4, "sleuthkit": 4,
+        "pdf forensics": 4, "office": 2, "docx": 2,
+    },
+    "blockchain": {
+        "solidity": 5, "pragma solidity": 5, "smart contract": 5,
+        "ethereum": 4, "web3": 4, "ether": 4, "wei": 3,
+        "evm": 5, "opcode": 4, "bytecode evm": 5,
+        "reentrancy": 5, "selfdestruct": 5, "delegatecall": 5,
+        "tx.origin": 5, "msg.sender": 4, "msg.value": 4,
+        "solidity overflow": 4, "integer overflow": 3,
+        "abi": 3, "contract address": 4, "deploy": 3,
+        "front running": 4, "flash loan": 5,
+        "vyper": 5, "cairo": 4,
+    },
+    "osint": {
+        "osint": 5, "open source intelligence": 5,
+        "username": 3, "social media": 4, "instagram": 3, "twitter": 3,
+        "google dork": 5, "site:": 4, "inurl:": 4, "intitle:": 4,
+        "whois": 4, "shodan": 5, "censys": 5,
+        "geolocation": 4, "gps": 3, "coordinates": 3,
+        "wayback machine": 5, "archive.org": 4,
+        "reverse image": 4, "tineye": 4,
+    },
+    "pyjail": {
+        "pyjail": 5, "python jail": 5, "sandbox escape": 5,
+        "__class__": 4, "__mro__": 4, "__subclasses__": 5,
+        "__builtins__": 4, "builtins": 3,
+        "eval(": 4, "exec(": 4, "compile(": 3,
+        "getattr": 3, "setattr": 3,
+        "forbidden": 3, "blacklist": 3, "whitelist": 3,
+        "restricted": 3, "jail": 3, "escape": 2,
+        "__import__": 4, "importlib": 3,
+    },
+}
+
 def guess_cat(info, desc, hint):
-    if hint and hint != "auto": return hint
-    text = (info.get("text","") + " ".join(info.get("strings",[])) + desc +
-            info.get("file_type","") +
-            " ".join(str(v) for v in info.get("extra",{}).values()) +
-            " ".join(str(v) for v in info.get("static",{}).values())).lower()
-    ext = info.get("ext","")
-    if ext in ['.pcap','.pcapng','.cap']: return "forensics"
-    if ext in ['.png','.jpg','.jpeg','.bmp','.gif','.tiff','.wav','.mp3','.flac']:
+    """Détection de catégorie par scoring pondéré."""
+    if hint and hint != "auto":
+        return hint
+
+    # Construit le texte complet à analyser
+    text = " ".join([
+        info.get("text", ""),
+        " ".join(info.get("strings", [])),
+        desc,
+        info.get("file_type", ""),
+        " ".join(str(v) for v in info.get("extra", {}).values()),
+        " ".join(str(v) for v in info.get("static", {}).values()),
+    ]).lower()
+
+    ext       = info.get("ext", "").lower()
+    file_type = info.get("file_type", "")
+
+    # ── Règles déterministes sur extension/type de fichier ──────────────────
+    if ext in (".pcap", ".pcapng", ".cap"):
         return "forensics"
-    if "ELF" in info.get("file_type",""):
-        if any(k in text for k in ["overflow","rop","heap","got","plt","libc","shellcode","ret2","format string","uaf","double free","tcache"]):
-            return "pwn"
-        return "reverse"
-    if "PE32" in info.get("file_type","") or ext in ['.exe','.dll']: return "reverse"
-    if ext in ['.class','.jar'] or "java" in info.get("file_type","").lower(): return "reverse"
-    if ext == '.pyc' or "python" in info.get("file_type","").lower(): return "reverse"
-    if ext in ['.sol','.vy','.cairo'] or any(k in text for k in ["solidity","pragma solidity","web3","ethers","abi","bytecode","evm","blockchain","ethereum","smart contract","reentrancy"]):
+    if ext in (".wav", ".mp3", ".flac", ".ogg", ".m4a"):
+        # Audio → forensics sauf si stego explicite
+        return "forensics"
+    if ext in (".sol", ".vy", ".cairo"):
         return "blockchain"
-    if any(k in text for k in ["rsa","aes","des","encrypt","decrypt","cipher","xor","hash","modulus","prime","elliptic","ecc","ecdsa","sha","hmac","vigenere","caesar"]):
-        return "crypto"
-    if any(k in text for k in ["http","sql","xss","login","cookie","jwt","flask","django","php","mysql","injection","sqli","ssti","lfi","ssrf","xxe","idor","graphql","oauth","csrf","deserialization","pickle"]):
-        return "web"
-    if any(k in text for k in ["osint","social media","google","whois","shodan","censys","geolocation"]):
-        return "osint"
-    if any(k in text for k in ["jail","pyjail","__class__","__mro__","__subclasses__","builtins","escape"]):
-        return "pyjail"
-    if any(k in text for k in ["steg","lsb","hidden","binwalk","memory","volatility","forensics","exiftool","metadata","pcap"]):
-        return "forensics"
-    return "misc"
+    if ext in (".class", ".jar"):
+        return "reverse"
+    if ext == ".pyc":
+        return "reverse"
+    if "ELF" in file_type:
+        # Pwn vs Reverse : score sur les mots-clés pwn
+        pwn_score = sum(v for k, v in CAT_KEYWORDS["pwn"].items() if k in text)
+        return "pwn" if pwn_score >= 6 else "reverse"
+    if "PE32" in file_type or "PE+" in file_type or ext in (".exe", ".dll", ".com"):
+        return "reverse"
+    if "Java" in file_type or "Java class" in file_type:
+        return "reverse"
+    if "python" in file_type.lower() or "python script" in file_type.lower():
+        # Script Python → peut être n'importe quoi, passe au scoring
+        pass
+
+    # ── Scoring pondéré ─────────────────────────────────────────────────────
+    scores = {cat: 0 for cat in CAT_KEYWORDS}
+    for cat, keywords in CAT_KEYWORDS.items():
+        for kw, weight in keywords.items():
+            if kw in text:
+                scores[cat] += weight
+
+    # Bonus pour les extensions
+    ext_bonus = {
+        ".png": ("forensics", 6), ".jpg": ("forensics", 6),
+        ".jpeg": ("forensics", 6), ".bmp": ("forensics", 6),
+        ".gif": ("forensics", 4), ".tiff": ("forensics", 4),
+    }
+    if ext in ext_bonus:
+        cat, bonus = ext_bonus[ext]
+        scores[cat] += bonus
+
+    best = max(scores, key=scores.get)
+    best_score = scores[best]
+
+    # Si le score max est trop faible → misc
+    if best_score < 3:
+        return "misc"
+
+    return best
 
 SYSTEM = {
     "reverse": """Tu es un expert CTF reverse engineering avec 10 ans d'expérience.
@@ -552,9 +717,10 @@ def analyze():
     api_key = request.headers.get('X-API-Key','')
     if not api_key: return jsonify({"error": "Clé API manquante"}), 401
 
-    desc      = request.form.get('description','').strip()
-    cat_hint  = request.form.get('category','auto')
-    user_hint = request.form.get('hint','').strip()
+    desc        = request.form.get('description','').strip()
+    cat_hint    = request.form.get('category','auto')
+    user_hint   = request.form.get('hint','').strip()
+    user_remote = request.form.get('remote','').strip()  # ex: "chall.ctf.fr:1337"
 
     info = {"name":"texte","size":len(desc),"ext":".txt","text":desc,"hex":"","strings":[],
             "files":[],"file_type":"text","static":{},"extra":{}}
@@ -575,7 +741,7 @@ def analyze():
         return jsonify({"error":"Aucun contenu"}), 400
 
     category = guess_cat(info, desc, cat_hint)
-    ctx      = build_ctx(info, desc, user_hint)
+    ctx      = build_ctx(info, desc, user_hint, user_remote)
     system   = SYSTEM.get(category, SYSTEM["misc"])
 
     def stream():
@@ -667,6 +833,10 @@ RÈGLES ABSOLUES:
 3. Tous les imports en haut
 4. try/except pour les erreurs (print l'erreur si échec)
 5. Les fichiers du challenge sont dans le dossier courant
+7. IMPORTANT libs disponibles : sympy, numpy, PIL, scapy, requests
+   Si pycryptodome absent → hashlib, struct, itertools (stdlib)
+   Si pwntools absent → socket.create_connection((HOST, PORT))
+   Si z3 absent → implémente brute-force ou algorithme alternatif
 
 RÈGLES CATÉGORIE {category.upper()}:
 {cat_rules}
@@ -693,8 +863,49 @@ Génère UNIQUEMENT le code Python dans ```python ... ```""",
             yield sse("log", {"type":"warn","msg":"[!] Pas de script à exécuter"})
             yield sse("step", {"step":3,"status":"done"})
         elif needs_remote:
-            yield sse("log", {"type":"warn","msg":f"[!] Service distant requis ({remote_hint}) — exécution locale impossible"})
-            yield sse("log", {"type":"info","msg":"[→] Télécharge le script et lance-le avec la bonne adresse"})
+            yield sse("log", {"type":"warn","msg":f"[!] Service distant requis — {remote_hint or 'host:port non détecté'}"})
+            # Essaie d'extraire host/port du hint et tester la connectivité
+            parsed_host, parsed_port = None, None
+            if remote_hint:
+                m = re.search(r'([a-zA-Z0-9.\-]+):(\d{2,5})', remote_hint)
+                if m:
+                    parsed_host, parsed_port = m.group(1), int(m.group(2))
+            # Test de connectivité rapide
+            if parsed_host and parsed_port:
+                nc_test = run(
+                    ["nc", "-z", "-w", "3", parsed_host, str(parsed_port)],
+                    timeout=6
+                )
+                if nc_test["code"] == 0:
+                    yield sse("log", {"type":"ok","msg":f"[+] Service distant accessible : {parsed_host}:{parsed_port}"})
+                    yield sse("log", {"type":"info","msg":"[*] Tentative d'exécution du script contre le vrai service..."})
+                    if filepath:
+                        dst = os.path.join(SANDBOX_DIR, info["name"])
+                        if not os.path.exists(dst): shutil.copy2(filepath, dst)
+                    # Injecte les vraies coords dans le script
+                    patched = current_script.replace(
+                        'HOST = "localhost"', f'HOST = "{parsed_host}"'
+                    ).replace(
+                        "HOST = 'localhost'", f"HOST = '{parsed_host}'"
+                    ).replace(
+                        'PORT = 1337', f'PORT = {parsed_port}'
+                    ).replace(
+                        f'PORT = 4444', f'PORT = {parsed_port}'
+                    )
+                    result = run_py(patched, timeout=60, cwd=SANDBOX_DIR)
+                    exec_out = (result["out"] + result["err"]).strip()
+                    for line in exec_out.split("\n")[:25]:
+                        if line.strip():
+                            has_flag_kw = any(k in line.lower() for k in ["flag","ctf","mctf","htb"])
+                            yield sse("log", {"type":"flag" if has_flag_kw and "{" in line else "dim","msg":f"    {line[:200]}"})
+                    real_flag = find_flag(exec_out)
+                    if real_flag:
+                        yield sse("log", {"type":"flag","msg":f"[★] FLAG EXTRAIT (remote): {real_flag}"})
+                else:
+                    yield sse("log", {"type":"warn","msg":f"[!] Service {parsed_host}:{parsed_port} inaccessible depuis le serveur"})
+                    yield sse("log", {"type":"info","msg":"[→] Lance le script localement avec python3 solution.py"})
+            else:
+                yield sse("log", {"type":"info","msg":"[→] Télécharge le script. Change HOST/PORT et lance python3 solution.py"})
             yield sse("step", {"step":3,"status":"done"})
         else:
             if filepath:
@@ -702,6 +913,7 @@ Génère UNIQUEMENT le code Python dans ```python ... ```""",
                 if not os.path.exists(dst): shutil.copy2(filepath, dst)
 
             current_script = script
+            exec_out = ""  # reset
             for attempt in range(3):
                 label = f"{attempt+1}/3"
                 yield sse("log", {"type":"info","msg":f"[*] Exécution (tentative {label})..."})
@@ -741,10 +953,15 @@ OUTPUT PARTIEL: {result['out'][:500]}
 CONTEXTE: {ctx[:4000]}
 
 Corrections à faire :
-- ImportError → implémente toi-même ou utilise une alternative standard
-- FileNotFoundError → les fichiers sont dans le dossier courant (os.path.basename)
-- TypeError/ValueError → vérifie types (bytes vs str, int vs bytes)
-- Pas de flag dans output → vérifie que print("FLAG:", flag) est appelé
+- ImportError → implémente toi-même OU utilise une des libs dispo :
+  sympy, numpy, PIL, scapy (pas pwntools ni pycryptodome sur ce serveur)
+  Pour la crypto : implémente RSA/AES/XOR avec les modules stdlib (struct, hashlib, itertools)
+  Pour les binaires : utilise subprocess.run(["objdump",...]) ou struct.unpack
+- FileNotFoundError → les fichiers sont dans le dossier courant : os.path.basename(filepath)
+- TypeError/ValueError → vérifie types (bytes vs str, int vs bytes, encode/decode)
+- ModuleNotFoundError pour pwntools → utilise socket/subprocess à la place
+- Pas de flag dans output → vérifie que print("FLAG:", flag) est bien appelé et atteint
+- Timeout → limite les itérations, utilise des algorithmes plus efficaces
 
 Génère le script CORRIGÉ dans ```python ... ```""",
                             system=system, max_tokens=4000)
