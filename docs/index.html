@@ -169,16 +169,23 @@ select option{background:var(--bg3)}textarea{resize:vertical;min-height:70px}
             <select id="cat">
               <option value="auto">🤖 Auto-detect</option>
               <option value="reverse">↺ Reverse Engineering</option>
-              <option value="pwn">⚡ Binary Exploitation</option>
+              <option value="pwn">⚡ Binary Exploitation (Pwn)</option>
               <option value="web">◉ Web</option>
               <option value="crypto">◆ Cryptographie</option>
-              <option value="forensics">🔍 Forensics / Stego</option>
+              <option value="forensics">🔍 Forensics / Stégo</option>
+              <option value="osint">🌐 OSINT</option>
+              <option value="pyjail">🔒 Python Jail</option>
+              <option value="blockchain">⛓ Blockchain / Smart Contract</option>
               <option value="misc">◌ Misc</option>
             </select>
           </div>
           <div class="fg"><label>Points (optionnel)</label>
             <input type="text" id="pts" placeholder="Ex: 500">
           </div>
+        </div>
+        <div style="margin-top:10px">
+          <label>Indice / Piste (optionnel)</label>
+          <input type="text" id="hint" placeholder="Ex: 'regarder les pixels LSB du canal rouge', 'RSA avec e=3', 'SSTI Jinja2'…">
         </div>
         <div class="btn-row">
           <button class="btn btn-g" id="sbtn" onclick="doSolve()" disabled>▸ Analyser + Exécuter</button>
