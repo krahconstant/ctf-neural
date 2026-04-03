@@ -1,19 +1,13 @@
 """
-CTF·NEURAL v6.0 — Architecture honnête & couverture complète
+CTF·NEURAL v6.1 — Architecture honnête & couverture complète
 Principe : on n'affiche JAMAIS un flag qui n'a pas été trouvé par exécution réelle.
 Le LLM génère du code, le serveur l'exécute, le flag vient du stdout réel.
 
-Nouveautés v6.0 :
-- Catégories : reverse, pwn, web, crypto, forensics, osint, pyjail, blockchain, misc
-- Analyse multi-fichiers (zip, tar.gz, 7z)
-- Analyse PCAP améliorée (scapy + tshark)
-- Analyse stéganographie (binwalk, steghide, zsteg, exiftool, LSB)
-- Support PE32 Windows (pefile, .NET monodis)
-- Détection bytecode Python (.pyc), Java (.class/.jar), Lua
-- Pipeline 4 étapes avec retry intelligent (3 tentatives)
-- Détection flag multi-format (standard, base64, hex, UUID)
-- Pré-installation automatique des dépendances
-- Champ "hint" optionnel pour guider l'IA
+v6.1 : optimisations mémoire pour Render Free (512 MB)
+- 1 seul worker gunicorn recommandé
+- build_ctx réduit (~60% moins de RAM)
+- del ctx après étape 1
+- strings limitées à 100
 """
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
@@ -85,7 +79,6 @@ def llm(api_key, prompt, system="", max_tokens=4096):
     raise Exception(f"Aucun modèle disponible. ({last_err})")
 
 def run(cmd, timeout=25, cwd=None, stdin=None, env_extra=None):
-    """Lance une commande système avec PATH étendu et capture complète."""
     env = {
         **os.environ,
         "PATH": (
@@ -110,14 +103,11 @@ def run(cmd, timeout=25, cwd=None, stdin=None, env_extra=None):
         return {"out": "", "err": str(e), "code": -1}
 
 def tool_available(name):
-    """Vérifie si un outil système est disponible."""
     return bool(shutil.which(name))
 
 def run_py(code, timeout=45, cwd=None):
-    """Exécute un script Python avec capture d'erreurs améliorée et cwd correct."""
     work_dir = cwd or SANDBOX_DIR
     tmp = os.path.join(SANDBOX_DIR, f"sol_{int(time.time()*1000)}.py")
-    # On injecte le code directement sans wrapper (le wrapper peut casser l'indentation)
     try:
         with open(tmp, "w") as f:
             f.write(code)
@@ -127,7 +117,6 @@ def run_py(code, timeout=45, cwd=None):
         except: pass
 
 def pip_install(packages):
-    """Installe des paquets pip à la volée avec --break-system-packages."""
     if not packages: return
     safe = [p for p in packages if re.match(r"^[a-zA-Z0-9_\-\.\[\]]+$", p)]
     if safe:
@@ -165,21 +154,18 @@ def find_flag(text):
         if len(candidate) < 8: continue
         if re.match(r'^[A-Za-z]+\{[0-9]+\}$', candidate) and len(candidate) < 12: continue
         return candidate
-    # base64 encoded flag
     for m in re.findall(r'(?:flag|Flag|FLAG)\s*[:=]\s*([A-Za-z0-9+/]{16,}={0,2})', text):
         try:
             decoded = base64.b64decode(m + "==").decode("utf-8", errors="replace")
             found = find_flag(decoded)
             if found: return found
         except: pass
-    # hex encoded flag
     for m in re.findall(r'(?:flag|hex|output)\s*[:=]\s*([0-9a-fA-F]{20,})', text, re.IGNORECASE):
         try:
             decoded = bytes.fromhex(m).decode("utf-8", errors="replace")
             found = find_flag(decoded)
             if found: return found
         except: pass
-    # UUID flag
     m = re.search(r'(?:flag|Flag|FLAG)\s*[:=]\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', text)
     if m: return m.group(1)
     return None
@@ -201,17 +187,15 @@ def analyze_file(filepath, filename):
     if ext in TEXT_EXT or (size < 500_000 and not ext):
         try:
             with open(filepath, 'r', errors='replace') as f:
-                info["text"] = f.read(60000)
+                info["text"] = f.read(30000)  # réduit de 60000 → 30000
         except: pass
     if not info["text"]:
-        r = run(["xxd", filepath]); info["hex"] = r["out"][:10000]
+        r = run(["xxd", filepath]); info["hex"] = r["out"][:5000]  # réduit de 10000 → 5000
         r = run(["strings", "-n", "5", filepath])
-        info["strings"] = [s for s in r["out"].split("\n") if s.strip()][:300]
-    # Archives
+        info["strings"] = [s for s in r["out"].split("\n") if s.strip()][:100]  # réduit de 300 → 100
     if ext == '.zip': _handle_zip(filepath, info)
     elif ext in ['.tar','.gz','.tgz','.bz2','.xz']: _handle_tar(filepath, info)
     elif ext == '.7z': run(f"7z x -y -o{SANDBOX_DIR} {filepath}", timeout=30)
-    # Binaires
     if "ELF" in info["file_type"]: _handle_elf(filepath, filename, info)
     elif "PE32" in info["file_type"] or "PE+" in info["file_type"] or ext in ['.exe','.dll']:
         _handle_pe(filepath, filename, info)
@@ -233,12 +217,12 @@ def _handle_zip(filepath, info):
         with zipfile.ZipFile(filepath) as z:
             info["files"] = z.namelist()
             parts = []
-            for name in info["files"][:50]:
+            for name in info["files"][:30]:  # réduit de 50 → 30
                 if any(name.endswith(e) for e in ['.py','.js','.c','.txt','.md','.json','.sh',
                         '.php','.html','.sage','.rb','.rs','.go','.java','.cs','.sol','.pem','.key',
                         '.xml','.yaml','.sql','.graphql']):
                     try:
-                        content = z.read(name).decode('utf-8', errors='replace')[:8000]
+                        content = z.read(name).decode('utf-8', errors='replace')[:4000]  # réduit de 8000 → 4000
                         parts.append(f"=== {name} ===\n{content}")
                     except: pass
             if parts: info["text"] = "\n\n".join(parts)
@@ -251,14 +235,14 @@ def _handle_tar(filepath, info):
             info["files"] = t.getnames()
             t.extractall(SANDBOX_DIR)
             parts = []
-            for m in t.getmembers()[:50]:
+            for m in t.getmembers()[:30]:  # réduit de 50 → 30
                 if m.isfile() and any(m.name.endswith(e) for e in [
                         '.py','.js','.c','.txt','.md','.json','.sh','.php','.html',
                         '.sage','.rb','.rs','.go','.java','.cs','.sol','.pem','.key']):
                     try:
                         f = t.extractfile(m)
                         if f:
-                            content = f.read(8000).decode('utf-8', errors='replace')
+                            content = f.read(4000).decode('utf-8', errors='replace')  # réduit de 8000 → 4000
                             parts.append(f"=== {m.name} ===\n{content}")
                     except: pass
             if parts: info["text"] = "\n\n".join(parts)
@@ -268,9 +252,9 @@ def _handle_elf(filepath, filename, info):
     try: os.chmod(filepath, stat.S_IRWXU)
     except: pass
     _copy_to_sandbox(filepath, filename)
-    info["static"]["symbols"]  = run(["nm", "--demangle", filepath])["out"][:5000]
-    info["static"]["disasm"]   = run(["objdump", "-d", "--no-show-raw-insn", "-M", "intel", filepath])["out"][:15000]
-    info["static"]["readelf"]  = run(["readelf", "-h", "-S", "-d", filepath])["out"][:4000]
+    info["static"]["symbols"]  = run(["nm", "--demangle", filepath])["out"][:3000]  # réduit
+    info["static"]["disasm"]   = run(["objdump", "-d", "--no-show-raw-insn", "-M", "intel", filepath])["out"][:8000]  # réduit de 15000 → 8000
+    info["static"]["readelf"]  = run(["readelf", "-h", "-S", "-d", filepath])["out"][:3000]
     info["static"]["checksec"] = run(f"checksec --file={filepath} 2>/dev/null || python3 -c \"import pwn; print(pwn.checksec('{filepath}'))\" 2>/dev/null", timeout=8)["out"][:1000]
     info["static"]["ltrace"]   = run(["ltrace", "-e", "strcmp+strncmp+memcmp", filepath], timeout=3, stdin="\n\n\n")["err"][:2000]
 
@@ -290,13 +274,13 @@ try:
 except ImportError:
     pass
 r = subprocess.run(['strings', '-n', '6', r'{filepath}'], capture_output=True, text=True, timeout=10)
-print("\\n== STRINGS =="); print(r.stdout[:5000])
+print("\\n== STRINGS =="); print(r.stdout[:3000])
 """
     result = run_py(pe_script, timeout=20)
-    info["static"]["pe_analysis"] = (result["out"] + result["err"])[:6000]
+    info["static"]["pe_analysis"] = (result["out"] + result["err"])[:4000]
     if "CIL" in info["file_type"] or ".NET" in info["file_type"]:
         r = run(["monodis", "--output=/dev/stdout", filepath], timeout=15)
-        info["static"]["dotnet_il"] = r["out"][:8000]
+        info["static"]["dotnet_il"] = r["out"][:5000]
 
 def _handle_java(filepath, filename, info):
     _copy_to_sandbox(filepath, filename)
@@ -304,15 +288,15 @@ def _handle_java(filepath, filename, info):
     if ext == '.jar':
         run(f"cd {SANDBOX_DIR} && jar xf {os.path.join(SANDBOX_DIR, filename)}", timeout=15)
         r = run(["find", SANDBOX_DIR, "-name", "*.class"], timeout=5)
-        classes = [c.strip() for c in r["out"].strip().split("\n") if c.strip()][:10]
+        classes = [c.strip() for c in r["out"].strip().split("\n") if c.strip()][:5]
         parts = []
         for cls in classes:
             r2 = run(["javap", "-c", "-private", cls], timeout=10)
-            parts.append(f"=== {cls} ===\n{r2['out'][:3000]}")
-        info["static"]["java_disasm"] = "\n".join(parts)[:10000]
+            parts.append(f"=== {cls} ===\n{r2['out'][:2000]}")
+        info["static"]["java_disasm"] = "\n".join(parts)[:6000]
     else:
         r = run(["javap", "-c", "-private", filepath], timeout=10)
-        info["static"]["java_disasm"] = (r["out"] + r["err"])[:8000]
+        info["static"]["java_disasm"] = (r["out"] + r["err"])[:5000]
 
 def _handle_pyc(filepath, filename, info):
     _copy_to_sandbox(filepath, filename)
@@ -337,19 +321,20 @@ except Exception as e:
     print(r.stdout or r.stderr)
 """
     result = run_py(decompile_script, timeout=25)
-    info["static"]["pyc_decompile"] = (result["out"] + result["err"])[:10000]
+    info["static"]["pyc_decompile"] = (result["out"] + result["err"])[:6000]  # réduit de 10000 → 6000
 
 def _handle_image(filepath, filename, info):
     dst = _copy_to_sandbox(filepath, filename)
-    r = run(["exiftool", filepath], timeout=10); info["extra"]["exiftool"] = r["out"][:3000]
+    r = run(["exiftool", filepath], timeout=10); info["extra"]["exiftool"] = r["out"][:2000]
     r = run(["binwalk", "--extract", "--quiet", filepath], timeout=30, cwd=SANDBOX_DIR)
-    info["extra"]["binwalk"] = r["out"][:3000]
-    r = run(["strings", "-n", "5", filepath]); info["strings"] = [s for s in r["out"].split("\n") if s.strip()][:200]
+    info["extra"]["binwalk"] = r["out"][:2000]
+    r = run(["strings", "-n", "5", filepath])
+    info["strings"] = [s for s in r["out"].split("\n") if s.strip()][:100]  # réduit de 200 → 100
     ext = os.path.splitext(filename)[1].lower()
     if ext in ['.png','.bmp']:
-        r = run(["zsteg", filepath], timeout=15); info["extra"]["zsteg"] = (r["out"]+r["err"])[:3000]
+        r = run(["zsteg", filepath], timeout=15); info["extra"]["zsteg"] = (r["out"]+r["err"])[:2000]
     r = run(["steghide", "extract", "-sf", filepath, "-p", "", "-f", "-xf", "/dev/stdout"], timeout=10)
-    if r["code"] == 0 and r["out"]: info["extra"]["steghide"] = r["out"][:2000]
+    if r["code"] == 0 and r["out"]: info["extra"]["steghide"] = r["out"][:1000]
     steg_script = f"""
 from PIL import Image
 import numpy as np
@@ -368,13 +353,14 @@ try:
         print(f"LSB preview: {{''.join(c if 32<=ord(c)<127 else '.' for c in decoded[:200])}}")
 except Exception as e: print(f"PIL: {{e}}")
 """
-    result = run_py(steg_script, timeout=15); info["extra"]["image_analysis"] = (result["out"]+result["err"])[:3000]
+    result = run_py(steg_script, timeout=15); info["extra"]["image_analysis"] = (result["out"]+result["err"])[:2000]
 
 def _handle_audio(filepath, filename, info):
     _copy_to_sandbox(filepath, filename)
-    r = run(["exiftool", filepath], timeout=10); info["extra"]["exiftool"] = r["out"][:2000]
-    r = run(["binwalk", filepath], timeout=15); info["extra"]["binwalk"] = r["out"][:2000]
-    r = run(["strings", "-n", "5", filepath]); info["strings"] = [s for s in r["out"].split("\n") if s.strip()][:150]
+    r = run(["exiftool", filepath], timeout=10); info["extra"]["exiftool"] = r["out"][:1500]
+    r = run(["binwalk", filepath], timeout=15); info["extra"]["binwalk"] = r["out"][:1500]
+    r = run(["strings", "-n", "5", filepath])
+    info["strings"] = [s for s in r["out"].split("\n") if s.strip()][:80]  # réduit de 150 → 80
     info["extra"]["note"] = "Audio: vérifier spectrogramme (Audacity/Sonic Visualiser), DTMF, morse, LSB audio"
 
 def _handle_pcap(filepath, filename, info):
@@ -384,11 +370,11 @@ def _handle_pcap(filepath, filename, info):
         ("tshark_proto", ["tshark", "-r", filepath, "-q", "-z", "io,phs"]),
         ("tshark_stream0", ["tshark", "-r", filepath, "-q", "-z", "follow,tcp,ascii,0"]),
     ]:
-        r = run(args, timeout=15); info["extra"][key] = r["out"][:3000]
+        r = run(args, timeout=15); info["extra"][key] = r["out"][:2000]  # réduit de 3000 → 2000
     r = run(f"tshark -r {filepath} -Y http -T fields -e http.request.method -e http.request.uri -e http.response.code 2>/dev/null | head -50", timeout=15)
-    info["extra"]["http_requests"] = r["out"][:2000]
+    info["extra"]["http_requests"] = r["out"][:1500]
     r = run(f"tshark -r {filepath} -Y dns -T fields -e dns.qry.name 2>/dev/null | sort -u | head -50", timeout=15)
-    info["extra"]["dns_queries"] = r["out"][:1000]
+    info["extra"]["dns_queries"] = r["out"][:800]
     pcap_script = f"""
 try:
     from scapy.all import rdpcap, TCP, UDP, ICMP, DNS, Raw
@@ -405,23 +391,23 @@ try:
             try:
                 data = p[Raw].load.decode('utf-8', errors='replace')
                 if any(k in data.lower() for k in ['flag','ctf','password','secret','key']):
-                    payloads.append(data[:500])
+                    payloads.append(data[:300])
             except: pass
     if payloads:
         print("=== PAYLOADS SUSPECTS ===")
-        for pl in payloads[:10]: print(repr(pl))
+        for pl in payloads[:5]: print(repr(pl))
 except Exception as e: print(f"scapy error: {{e}}")
 """
-    result = run_py(pcap_script, timeout=30); info["extra"]["scapy_analysis"] = (result["out"]+result["err"])[:5000]
+    result = run_py(pcap_script, timeout=30); info["extra"]["scapy_analysis"] = (result["out"]+result["err"])[:3000]
 
 def _handle_pdf(filepath, filename, info):
     _copy_to_sandbox(filepath, filename)
-    r = run(["pdftotext", filepath, "-"], timeout=15); info["text"] = r["out"][:20000]
-    r = run(["exiftool", filepath], timeout=10); info["extra"]["exiftool"] = r["out"][:2000]
-    r = run(["binwalk", filepath], timeout=15); info["extra"]["binwalk"] = r["out"][:2000]
-    r = run(["strings", "-n", "5", filepath]); info["strings"] = [s for s in r["out"].split("\n") if s.strip()][:200]
+    r = run(["pdftotext", filepath, "-"], timeout=15); info["text"] = r["out"][:10000]  # réduit de 20000 → 10000
+    r = run(["exiftool", filepath], timeout=10); info["extra"]["exiftool"] = r["out"][:1500]
+    r = run(["binwalk", filepath], timeout=15); info["extra"]["binwalk"] = r["out"][:1500]
+    r = run(["strings", "-n", "5", filepath])
+    info["strings"] = [s for s in r["out"].split("\n") if s.strip()][:100]  # réduit de 200 → 100
 
-# Mots-clés par catégorie avec pondération (plus de points = plus probable)
 CAT_KEYWORDS = {
     "pwn": {
         "overflow": 4, "buffer overflow": 5, "stack overflow": 5,
@@ -523,11 +509,8 @@ CAT_KEYWORDS = {
 }
 
 def guess_cat(info, desc, hint):
-    """Détection de catégorie par scoring pondéré."""
     if hint and hint != "auto":
         return hint
-
-    # Construit le texte complet à analyser
     text = " ".join([
         info.get("text", ""),
         " ".join(info.get("strings", [])),
@@ -536,42 +519,24 @@ def guess_cat(info, desc, hint):
         " ".join(str(v) for v in info.get("extra", {}).values()),
         " ".join(str(v) for v in info.get("static", {}).values()),
     ]).lower()
-
     ext       = info.get("ext", "").lower()
     file_type = info.get("file_type", "")
-
-    # ── Règles déterministes sur extension/type de fichier ──────────────────
-    if ext in (".pcap", ".pcapng", ".cap"):
-        return "forensics"
-    if ext in (".wav", ".mp3", ".flac", ".ogg", ".m4a"):
-        # Audio → forensics sauf si stego explicite
-        return "forensics"
-    if ext in (".sol", ".vy", ".cairo"):
-        return "blockchain"
-    if ext in (".class", ".jar"):
-        return "reverse"
-    if ext == ".pyc":
-        return "reverse"
+    if ext in (".pcap", ".pcapng", ".cap"): return "forensics"
+    if ext in (".wav", ".mp3", ".flac", ".ogg", ".m4a"): return "forensics"
+    if ext in (".sol", ".vy", ".cairo"): return "blockchain"
+    if ext in (".class", ".jar"): return "reverse"
+    if ext == ".pyc": return "reverse"
     if "ELF" in file_type:
-        # Pwn vs Reverse : score sur les mots-clés pwn
         pwn_score = sum(v for k, v in CAT_KEYWORDS["pwn"].items() if k in text)
         return "pwn" if pwn_score >= 6 else "reverse"
     if "PE32" in file_type or "PE+" in file_type or ext in (".exe", ".dll", ".com"):
         return "reverse"
-    if "Java" in file_type or "Java class" in file_type:
-        return "reverse"
-    if "python" in file_type.lower() or "python script" in file_type.lower():
-        # Script Python → peut être n'importe quoi, passe au scoring
-        pass
-
-    # ── Scoring pondéré ─────────────────────────────────────────────────────
+    if "Java" in file_type or "Java class" in file_type: return "reverse"
     scores = {cat: 0 for cat in CAT_KEYWORDS}
     for cat, keywords in CAT_KEYWORDS.items():
         for kw, weight in keywords.items():
             if kw in text:
                 scores[cat] += weight
-
-    # Bonus pour les extensions
     ext_bonus = {
         ".png": ("forensics", 6), ".jpg": ("forensics", 6),
         ".jpeg": ("forensics", 6), ".bmp": ("forensics", 6),
@@ -580,60 +545,45 @@ def guess_cat(info, desc, hint):
     if ext in ext_bonus:
         cat, bonus = ext_bonus[ext]
         scores[cat] += bonus
-
     best = max(scores, key=scores.get)
-    best_score = scores[best]
-
-    # Si le score max est trop faible → misc
-    if best_score < 3:
-        return "misc"
-
-    return best
+    return best if scores[best] >= 3 else "misc"
 
 SYSTEM = {
     "reverse": """Tu es un expert CTF reverse engineering avec 10 ans d'expérience.
 Tu analyses des binaires ELF/PE, bytecodes (Python .pyc, Java .class, Lua .luac), VM custom, obfuscation.
 Tu maîtrises : angr, radare2, ghidra, pwndbg, z3, unicorn, capstone.
 Tu génères du code Python autonome qui extrait le flag par analyse statique, émulation ou résolution de contraintes.""",
-
     "pwn": """Tu es un expert CTF binary exploitation (pwn) avec 10 ans d'expérience.
 Tu crées des exploits pour : stack overflow, heap (tcache, fastbin, unsorted bin, House of X),
 ROP chains, format string, use-after-free, double free, off-by-one, FSOP.
 Tu maîtrises pwntools, pwndbg, GEF, ROPgadget, one_gadget, libc-database.
 Tu génères des scripts Python pwntools complets avec gestion des offsets, gadgets et leaks libc.""",
-
     "web": """Tu es un expert CTF web security avec 10 ans d'expérience.
 Tu exploites : SQLi (blind, time-based, UNION), SSTI (Jinja2, Twig, FreeMarker), LFI/RFI, SSRF,
 XXE, IDOR, JWT attacks, OAuth abuse, CSRF, race conditions, deserialization (pickle, Java, PHP),
 GraphQL injection, NoSQL injection, HTTP request smuggling.
 Tu génères des scripts Python requests/httpx complets avec gestion des sessions et cookies.""",
-
     "crypto": """Tu es un expert CTF cryptanalyse avec 10 ans d'expérience.
 Tu attaques : RSA (factorisation, e petit, wiener, broadcast, padding oracle, LSB oracle),
 AES (ECB, CBC bit-flip, padding oracle, GCM nonce reuse), ECC (ECDSA k-reuse, pohlig-hellman),
 XOR (crib-dragging), hash (length extension), chiffres classiques (Vigenère, Rail fence).
 Tu maîtrises : pycryptodome, sympy, sage, gmpy2, z3, lattice attacks (LLL).""",
-
     "forensics": """Tu es un expert CTF forensics et stéganographie avec 10 ans d'expérience.
 Tu analyses : PCAP (scapy/tshark), mémoire (Volatility 3), images (LSB, DCT, binwalk, steghide, zsteg),
 audio (spectrogramme, DTMF, morse, LSB audio), disques (Autopsy, sleuthkit), PDF, Office, firmware.
 Tu génères du code Python qui extrait les données cachées et affiche le flag.""",
-
     "osint": """Tu es un expert CTF OSINT avec 10 ans d'expérience.
 Tu trouves des informations via : Google dorking, Shodan, Censys, WHOIS, DNS, réseaux sociaux,
 Wayback Machine, reverse image search, EXIF metadata, geolocalisation.
 Tu génères des scripts Python qui automatisent les recherches OSINT.""",
-
     "pyjail": """Tu es un expert CTF Python jail (pyjail) avec 10 ans d'expérience.
 Tu t'échappes via : __class__.__mro__, __subclasses__(), builtins bypass, f-strings tricks,
 exec/eval avec encoding, __import__ alternatif, attribute access tricks, audit hooks bypass.
 Tu génères du code Python qui s'échappe proprement et affiche le flag.""",
-
     "blockchain": """Tu es un expert CTF blockchain / smart contracts avec 10 ans d'expérience.
 Tu exploites : reentrancy, integer overflow, tx.origin bypass, selfdestruct, delegatecall,
 storage layout, front-running, flash loan, EVM opcodes.
 Tu utilises : web3.py, eth-brownie, foundry, solcx.""",
-
     "misc": """Tu es un expert CTF polyvalent avec 10 ans d'expérience.
 Tu résous des défis variés : scripting, encodages exotiques, langages ésotériques (Brainfuck, Whitespace),
 puzzles logiques, QR codes, ROT/base variations, algorithmes personnalisés.
@@ -645,50 +595,42 @@ CATEGORY_RULES = {
 - Pour les .pyc : utilise marshal + dis pour décompiler, cherche les constantes
 - Pour les .class/.jar : utilise javap, cherche les strings et la logique de vérification
 - Affiche toutes les constantes, strings et clés trouvées dans le binaire""",
-
     "pwn": """- from pwn import *; context.binary = ELF('./binary')
 - Détecte les protections avec checksec avant de coder l'exploit
 - Pour stack : cyclic(1000) + cyclic_find() pour l'offset
 - Pour format string : %p.%p.%p pour leaker des adresses, cherche les offsets
 - Pour ROP : rop = ROP(elf); gadgets = rop.find_gadget(['pop rdi', 'ret'])
 - Gère le leak libc : offset = leak - libc.sym['puts']; libc.address = offset""",
-
     "web": """- Lance les requêtes contre l'URL fournie dans le défi
 - Pour SQLi : essaie ORDER BY, UNION SELECT NULL, error-based, blind boolean
 - Pour SSTI Jinja2 : {{7*7}}, {{''.__class__.__mro__[1].__subclasses__()}}
 - Pour JWT : pyjwt sans vérification, alg:none, brute force secret HS256
 - Pour LFI : /etc/passwd, php://filter/convert.base64-encode/resource=index.php
 - Gère les cookies et sessions entre les requêtes""",
-
     "crypto": """- from Crypto.Util.number import long_to_bytes, bytes_to_long, getPrime
 - Pour RSA petit e : m = gmpy2.iroot(c, e)[0]; print(long_to_bytes(m))
 - Pour RSA : essaie factordb.com via requests avant de tenter la factorisation
 - Pour XOR : si len(key) petit, essaie brute force sur la longueur de clé
 - Pour AES-ECB : détecte et exploite les blocs répétés
 - Affiche les valeurs intermédiaires pour débugger""",
-
     "forensics": """- Pour images : essaie PIL LSB, binwalk extract, steghide, zsteg, exiftool
 - Pour PCAP : extrait les streams avec scapy ou tshark, cherche les données sensibles
 - Pour mémoire : volatility3 linux.bash, linux.pslist, windows.pslist
 - Cherche les flags dans : commentaires, métadonnées, chunks cachés, pixels LSB
 - Si binwalk trouve des fichiers embarqués, extrais-les et analyse-les""",
-
     "osint": """- Génère les requêtes de recherche et liens directs à vérifier
 - Analyse les métadonnées EXIF des images fournies
 - Cherche sur archive.org avec la date donnée
 - Vérifie WHOIS, DNS records (A, MX, TXT, CNAME)""",
-
     "pyjail": """- Essaie : "".__class__.__mro__[1].__subclasses__() pour lister les classes
 - Trouve subprocess.Popen ou os.system dans la liste
 - Essaie les encodages : chr(111)+chr(115) pour 'os'
 - Bypass avec : getattr(__builtins__, 'exec')('import os; os.system("cat flag")')""",
-
     "blockchain": """- from web3 import Web3; w3 = Web3(Web3.HTTPProvider(RPC_URL))
 - Charge l'ABI et l'adresse du contrat depuis les fichiers fournis
 - Pour reentrancy : crée un contrat attaquant avec fallback
 - Analyse le bytecode avec pyevmasm si l'ABI n'est pas dispo
 - Cherche les clés privées exposées dans le challenge""",
-
     "misc": """- Essaie tous les encodages : base64, hex, ROT13, URL, HTML entities, base32, base58
 - Pour langages ésotériques : utilise une lib Python ou interprète manuellement
 - Cherche des patterns visuels ou auditifs dans les données
@@ -708,7 +650,7 @@ def health():
                      ("unicorn","unicorn"),("pefile","pefile")]:
         try: __import__(imp); python_libs[lib] = True
         except ImportError: python_libs[lib] = False
-    return jsonify({"status":"ok","version":"6.0","engine":"groq/llama-3.3-70b",
+    return jsonify({"status":"ok","version":"6.1","engine":"groq/llama-3.3-70b",
                     "tools":tools,"python_libs":python_libs,"categories":list(SYSTEM.keys())})
 
 @app.route('/analyze', methods=['POST','OPTIONS'])
@@ -720,7 +662,7 @@ def analyze():
     desc        = request.form.get('description','').strip()
     cat_hint    = request.form.get('category','auto')
     user_hint   = request.form.get('hint','').strip()
-    user_remote = request.form.get('remote','').strip()  # ex: "chall.ctf.fr:1337"
+    user_remote = request.form.get('remote','').strip()
 
     info = {"name":"texte","size":len(desc),"ext":".txt","text":desc,"hex":"","strings":[],
             "files":[],"file_type":"text","static":{},"extra":{}}
@@ -745,6 +687,8 @@ def analyze():
     system   = SYSTEM.get(category, SYSTEM["misc"])
 
     def stream():
+        nonlocal ctx  # permet de libérer après étape 1
+
         def sse(ev, d):
             return f"data: {json.dumps({'event':ev,'data':d}, ensure_ascii=False)}\n\n"
 
@@ -756,7 +700,7 @@ def analyze():
         try:
             raw, used_model = llm(api_key, f"""Analyse ce défi CTF.
 
-{ctx[:8000]}
+{ctx[:6000]}
 
 Réponds UNIQUEMENT en JSON valide (sans markdown autour) :
 {{
@@ -792,7 +736,7 @@ Réponds UNIQUEMENT en JSON valide (sans markdown autour) :
         try:
             analysis, _ = llm(api_key, f"""Analyse technique approfondie de ce défi CTF.
 
-{ctx[:14000]}
+{ctx[:10000]}
 
 Recon: {json.dumps(recon, ensure_ascii=False)}
 
@@ -810,6 +754,12 @@ Sois TRÈS précis. Cite les valeurs exactes du code.""",
             yield sse("log", {"type":"ok","msg":"[+] Analyse technique complète"})
             for line in analysis.split('\n')[:6]:
                 if line.strip(): yield sse("log", {"type":"dim","msg":f"    {line.strip()[:120]}"})
+
+            # ★ LIBÉRATION MÉMOIRE : ctx n'est plus nécessaire après l'étape 1
+            ctx_short = ctx[:3000]
+            del ctx
+            ctx = ctx_short
+
         except Exception as e:
             yield sse("step", {"step":1,"status":"error"}); yield sse("error", {"msg":str(e)}); return
 
@@ -822,7 +772,7 @@ Sois TRÈS précis. Cite les valeurs exactes du code.""",
             exploit_raw, _ = llm(api_key, f"""Génère le script Python COMPLET qui résout ce défi CTF.
 
 DÉFI:
-{ctx[:12000]}
+{ctx}
 
 ANALYSE:
 {analysis[:3000]}
@@ -833,7 +783,7 @@ RÈGLES ABSOLUES:
 3. Tous les imports en haut
 4. try/except pour les erreurs (print l'erreur si échec)
 5. Les fichiers du challenge sont dans le dossier courant
-7. IMPORTANT libs disponibles : sympy, numpy, PIL, scapy, requests
+6. IMPORTANT libs disponibles : sympy, numpy, PIL, scapy, requests
    Si pycryptodome absent → hashlib, struct, itertools (stdlib)
    Si pwntools absent → socket.create_connection((HOST, PORT))
    Si z3 absent → implémente brute-force ou algorithme alternatif
@@ -864,34 +814,23 @@ Génère UNIQUEMENT le code Python dans ```python ... ```""",
             yield sse("step", {"step":3,"status":"done"})
         elif needs_remote:
             yield sse("log", {"type":"warn","msg":f"[!] Service distant requis — {remote_hint or 'host:port non détecté'}"})
-            # Essaie d'extraire host/port du hint et tester la connectivité
             parsed_host, parsed_port = None, None
             if remote_hint:
                 m = re.search(r'([a-zA-Z0-9.\-]+):(\d{2,5})', remote_hint)
                 if m:
                     parsed_host, parsed_port = m.group(1), int(m.group(2))
-            # Test de connectivité rapide
             if parsed_host and parsed_port:
-                nc_test = run(
-                    ["nc", "-z", "-w", "3", parsed_host, str(parsed_port)],
-                    timeout=6
-                )
+                nc_test = run(["nc", "-z", "-w", "3", parsed_host, str(parsed_port)], timeout=6)
                 if nc_test["code"] == 0:
                     yield sse("log", {"type":"ok","msg":f"[+] Service distant accessible : {parsed_host}:{parsed_port}"})
                     yield sse("log", {"type":"info","msg":"[*] Tentative d'exécution du script contre le vrai service..."})
                     if filepath:
                         dst = os.path.join(SANDBOX_DIR, info["name"])
                         if not os.path.exists(dst): shutil.copy2(filepath, dst)
-                    # Injecte les vraies coords dans le script
-                    patched = current_script.replace(
-                        'HOST = "localhost"', f'HOST = "{parsed_host}"'
-                    ).replace(
-                        "HOST = 'localhost'", f"HOST = '{parsed_host}'"
-                    ).replace(
-                        'PORT = 1337', f'PORT = {parsed_port}'
-                    ).replace(
-                        f'PORT = 4444', f'PORT = {parsed_port}'
-                    )
+                    patched = script.replace('HOST = "localhost"', f'HOST = "{parsed_host}"') \
+                                    .replace("HOST = 'localhost'", f"HOST = '{parsed_host}'") \
+                                    .replace('PORT = 1337', f'PORT = {parsed_port}') \
+                                    .replace('PORT = 4444', f'PORT = {parsed_port}')
                     result = run_py(patched, timeout=60, cwd=SANDBOX_DIR)
                     exec_out = (result["out"] + result["err"]).strip()
                     for line in exec_out.split("\n")[:25]:
@@ -913,7 +852,7 @@ Génère UNIQUEMENT le code Python dans ```python ... ```""",
                 if not os.path.exists(dst): shutil.copy2(filepath, dst)
 
             current_script = script
-            exec_out = ""  # reset
+            exec_out = ""
             for attempt in range(3):
                 label = f"{attempt+1}/3"
                 yield sse("log", {"type":"info","msg":f"[*] Exécution (tentative {label})..."})
@@ -929,7 +868,6 @@ Génère UNIQUEMENT le code Python dans ```python ... ```""",
                 if real_flag:
                     yield sse("log", {"type":"flag","msg":f"[★] FLAG EXTRAIT: {real_flag}"}); break
 
-                # Cherche dans les fichiers créés
                 if result["code"] == 0:
                     try:
                         r2 = run(f"find {SANDBOX_DIR} -maxdepth 3 -newer /tmp -type f -exec strings {{}} \\; 2>/dev/null | head -100", timeout=8)
@@ -950,18 +888,17 @@ SCRIPT:
 ```
 ERREUR: {result['err'][:1000]}
 OUTPUT PARTIEL: {result['out'][:500]}
-CONTEXTE: {ctx[:4000]}
+CONTEXTE: {ctx}
 
 Corrections à faire :
 - ImportError → implémente toi-même OU utilise une des libs dispo :
   sympy, numpy, PIL, scapy (pas pwntools ni pycryptodome sur ce serveur)
   Pour la crypto : implémente RSA/AES/XOR avec les modules stdlib (struct, hashlib, itertools)
   Pour les binaires : utilise subprocess.run(["objdump",...]) ou struct.unpack
-- FileNotFoundError → les fichiers sont dans le dossier courant : os.path.basename(filepath)
+- FileNotFoundError → les fichiers sont dans le dossier courant
 - TypeError/ValueError → vérifie types (bytes vs str, int vs bytes, encode/decode)
 - ModuleNotFoundError pour pwntools → utilise socket/subprocess à la place
-- Pas de flag dans output → vérifie que print("FLAG:", flag) est bien appelé et atteint
-- Timeout → limite les itérations, utilise des algorithmes plus efficaces
+- Pas de flag dans output → vérifie que print("FLAG:", flag) est bien appelé
 
 Génère le script CORRIGÉ dans ```python ... ```""",
                             system=system, max_tokens=4000)
@@ -979,12 +916,12 @@ Génère le script CORRIGÉ dans ```python ... ```""",
             writeup_raw, _ = llm(api_key, f"""Écris un writeup CTF concis pour ce défi.
 
 Catégorie: {category} | Fichier: {info['name']}
-Analyse: {analysis[:800]}
+Analyse: {analysis[:600]}
 {"Flag trouvé: " + real_flag if real_flag else "Flag non trouvé automatiquement."}
 
 3-4 phrases : vulnérabilité exploitée, méthode de résolution, pourquoi ça fonctionne.
 Texte simple, pas de JSON ni markdown.""",
-                system="Tu es un expert CTF. Tu rédiges des writeups clairs et pédagogiques.", max_tokens=500)
+                system="Tu es un expert CTF. Tu rédiges des writeups clairs et pédagogiques.", max_tokens=400)
             writeup = writeup_raw.strip()
         except:
             writeup = f"Défi {category} analysé. {'Flag extrait.' if real_flag else 'Analyse manuelle requise.'}"
@@ -1012,21 +949,23 @@ Texte simple, pas de JSON ni markdown.""",
     return Response(stream_with_context(stream()), mimetype='text/event-stream',
                     headers={'Cache-Control':'no-cache','X-Accel-Buffering':'no','Access-Control-Allow-Origin':'*'})
 
-def build_ctx(info, desc, hint=""):
+def build_ctx(info, desc, hint="", remote=""):
+    """Construit le contexte — version allégée pour économiser la RAM."""
     ctx  = f"Fichier: {info['name']} ({info['size']} octets)\nType: {info['file_type']}\n"
-    if info["files"]: ctx += f"Archive contient: {', '.join(info['files'][:50])}\n"
-    if info["text"]: ctx += f"\n--- CONTENU ---\n{info['text'][:22000]}\n"
+    if info["files"]: ctx += f"Archive contient: {', '.join(info['files'][:30])}\n"
+    if info["text"]: ctx += f"\n--- CONTENU ---\n{info['text'][:10000]}\n"
     elif info["hex"]:
-        ctx += f"\n--- HEX DUMP ---\n{info['hex'][:6000]}\n"
+        ctx += f"\n--- HEX DUMP ---\n{info['hex'][:3000]}\n"
         if info["strings"]:
             ctx += f"\n--- STRINGS ({len(info['strings'])} trouvées) ---\n"
-            ctx += "\n".join(info["strings"][:150]) + "\n"
+            ctx += "\n".join(info["strings"][:80]) + "\n"
     for k, v in info.get("static", {}).items():
-        if v: ctx += f"\n--- {k.upper()} ---\n{str(v)[:6000]}\n"
+        if v: ctx += f"\n--- {k.upper()} ---\n{str(v)[:3000]}\n"
     for k, v in info.get("extra", {}).items():
-        if v and str(v).strip(): ctx += f"\n--- {k.upper()} ---\n{str(v)[:3000]}\n"
+        if v and str(v).strip(): ctx += f"\n--- {k.upper()} ---\n{str(v)[:1500]}\n"
     if desc: ctx += f"\n--- DESCRIPTION DU DÉFI ---\n{desc}\n"
-    if hint: ctx += f"\n--- INDICE DE L'UTILISATEUR ---\n{hint}\n"
+    if hint: ctx += f"\n--- INDICE ---\n{hint}\n"
+    if remote: ctx += f"\n--- SERVICE DISTANT ---\n{remote}\n"
     return ctx
 
 def guess_format(info, desc):
