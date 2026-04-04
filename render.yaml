@@ -3,23 +3,27 @@ services:
     name: ctf-neural
     runtime: python
     buildCommand: |
-      apt-get update && apt-get install -y \
-        binutils \
-        file \
-        xxd \
-        binwalk \
-        strace \
-        ltrace \
-        strings \
-        libmagic1 \
+      apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        binutils file xxd gdb strace ltrace \
+        binwalk foremost \
+        libimage-exiftool-perl \
         steghide \
-        foremost \
-        exiftool \
-        ncat \
-        gdb \
-        && pip install -r requirements.txt
+        tshark \
+        netcat-openbsd \
+        radare2 \
+        7zip \
+        default-jdk \
+        p7zip-full \
+        libmagic1 \
+        checksec \
+        ltrace strace \
+        ruby ruby-dev \
+        build-essential \
+        && gem install zsteg --no-document 2>/dev/null || true \
+        && pip install -r requirements.txt \
+        && pip install pwntools pycryptodome z3-solver gmpy2 capstone unicorn web3 pefile angr 2>/dev/null || true
     startCommand: gunicorn app:app --workers 2 --threads 4 --timeout 180 --bind 0.0.0.0:$PORT
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11.0
+        value: "3.11"
