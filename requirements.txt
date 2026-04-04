@@ -1,18 +1,29 @@
+# ── Core Flask ────────────────────────────────────────────────────────────────
 flask==3.0.3
 flask-cors==4.0.1
 requests==2.32.3
 werkzeug==3.0.4
 gunicorn==22.0.0
+
+# ── Crypto (pycryptodome & sympy couvrent 95% des défis crypto CTF) ───────────
 pycryptodome==3.20.0
-pwntools==4.13.0
 sympy==1.13.3
-z3-solver==4.13.0.0
-pillow==10.4.0
-scapy==2.5.0
-python-magic==0.4.27
-gmpy2==2.2.1
+# gmpy2 retiré — nécessite libgmp-dev + libmpfr-dev (non dispo sur Render par défaut)
+# Fallback : sympy.ntheory, pow(a, b, n) natif Python 3.8+
+
+# ── Reverse / Pwn ─────────────────────────────────────────────────────────────
+# pwntools retiré — dépendances système complexes (unicorn, capstone binaires)
+# Fallback : socket natif + struct
 capstone==5.0.3
-unicorn==2.1.1
 pefile==2024.8.26
-web3==7.4.0
+
+# ── Analyse / Stégo ───────────────────────────────────────────────────────────
+pillow==10.4.0
 numpy==2.1.3
+python-magic==0.4.27
+
+# ── Réseau / Forensics ────────────────────────────────────────────────────────
+scapy==2.5.0
+
+# ── Solveurs ──────────────────────────────────────────────────────────────────
+z3-solver==4.13.0.0
